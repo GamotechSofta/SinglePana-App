@@ -491,8 +491,7 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
   @override
   Widget build(BuildContext context) {
     final drawCurrent = '${_slotData?['drawLabelCurrent'] ?? '-'}';
-    final drawPrev = '${_slotData?['drawLabelPrev'] ?? '-'}';
-    final drawNext = '${_slotData?['drawLabelNext'] ?? '-'}';
+    final remainingSlots = _remainingSlotsForToday();
     final secsHint = int.tryParse('${_slotData?['secondsUntilHint'] ?? 0}') ?? 0;
     final secsEnd = int.tryParse('${_slotData?['secondsUntilSlotEnd'] ?? 0}') ?? 0;
     final quizLabel = 'QUIZ${_selectedQuiz.toString().padLeft(2, '0')}';
@@ -543,18 +542,35 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
                   ),
                   const SizedBox(width: 8),
                   SizedBox(
-                    width: 84,
-                    child: _drawBadge(drawPrev, false),
-                  ),
-                  const SizedBox(width: 4),
-                  SizedBox(
-                    width: 84,
-                    child: _drawBadge(drawCurrent, true),
-                  ),
-                  const SizedBox(width: 4),
-                  SizedBox(
-                    width: 84,
-                    child: _drawBadge(drawNext, false),
+                    width: 360,
+                    height: 30,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: remainingSlots.isEmpty
+                          ? const Center(
+                              child: Text(
+                                'No remaining slots',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            )
+                          : ListView.separated(
+                              scrollDirection: Axis.horizontal,
+                              itemCount: remainingSlots.length,
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(width: 4),
+                              itemBuilder: (context, i) => _drawBadge(
+                                remainingSlots[i],
+                                i == 0,
+                              ),
+                            ),
+                    ),
                   ),
                 ],
               ),
@@ -614,7 +630,8 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
 
   Widget _drawBadge(String label, bool active) {
     return Container(
-      height: 30,
+      height: 22,
+      padding: const EdgeInsets.symmetric(horizontal: 6),
       alignment: Alignment.center,
       decoration: BoxDecoration(
         color: active ? const Color(0xFFF5E14A) : const Color(0xFF5C2222),
@@ -630,6 +647,45 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
         ),
       ),
     );
+  }
+
+  DateTime _nextQuarter(DateTime now) {
+    final base = DateTime(now.year, now.month, now.day, now.hour, now.minute);
+    final mins = base.hour * 60 + base.minute;
+    final nextQuarterMins = (mins ~/ 15 + 1) * 15;
+    final wrapped = nextQuarterMins % (24 * 60);
+    final dayCarry = nextQuarterMins >= (24 * 60) ? 1 : 0;
+    return DateTime(
+      base.year,
+      base.month,
+      base.day + dayCarry,
+      wrapped ~/ 60,
+      wrapped % 60,
+    );
+  }
+
+  List<String> _remainingSlotsForToday() {
+    final nextIso = (_slotData?['nextSlotStartIso'] ?? '').toString().trim();
+    final nextDt = DateTime.tryParse(nextIso)?.toLocal();
+    final now = DateTime.now();
+    final start = nextDt ?? _nextQuarter(now);
+    final dayEnd = DateTime(start.year, start.month, start.day).add(
+      const Duration(days: 1),
+    );
+    if (!start.isBefore(dayEnd)) return const [];
+
+    final out = <String>[];
+    var i = 0;
+    while (true) {
+      final dt = start.add(Duration(minutes: i * 15));
+      if (!dt.isBefore(dayEnd)) break;
+      final hh = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+      final mm = dt.minute.toString().padLeft(2, '0');
+      final ampm = dt.hour >= 12 ? 'PM' : 'AM';
+      out.add('$hh:$mm $ampm');
+      i += 1;
+    }
+    return out;
   }
 
   Widget _buildStudyTable(String quizLabel, String drawCurrent) {

@@ -35,7 +35,7 @@ class _LotteryPageState extends State<LotteryPage> {
 
   _Target? _pendingTarget;
   String _activeFilter = 'all';
-  String _amountDraft = '2';
+  String _amountDraft = '0';
   int _enteredAmount = 2;
 
   final Map<String, int> _selectedMap = {};
@@ -271,7 +271,41 @@ class _LotteryPageState extends State<LotteryPage> {
       return;
     }
 
-    final rounds = grouped.entries.toList()
+    final previewLines = <_BetPreviewLine>[
+      for (final entry in grouped.entries)
+        for (final bet in entry.value.entries)
+          _BetPreviewLine(quizId: entry.key, number: bet.key, amount: bet.value),
+    ]..sort((a, b) {
+        final quizCmp = a.quizId.compareTo(b.quizId);
+        if (quizCmp != 0) return quizCmp;
+        return a.number.compareTo(b.number);
+      });
+
+    final approvedLines = await _showBetPreviewDialog(previewLines);
+    if (approvedLines == null) return;
+    if (approvedLines.isEmpty) {
+      _showNote('Please keep at least one bet line.');
+      return;
+    }
+
+    final regrouped = <int, Map<int, int>>{};
+    for (final line in approvedLines) {
+      final byNum = regrouped.putIfAbsent(line.quizId, () => <int, int>{});
+      byNum[line.number] = line.amount;
+    }
+
+    // Reflect removals made in preview immediately on board data.
+    setState(() {
+      _selectedMap
+        ..clear()
+        ..addEntries(
+          approvedLines.map(
+            (line) => MapEntry('${line.quizId}-${line.number}', line.amount),
+          ),
+        );
+    });
+
+    final rounds = regrouped.entries.toList()
       ..sort((a, b) => a.key.compareTo(b.key));
 
     final payloadRounds = [
@@ -331,16 +365,20 @@ class _LotteryPageState extends State<LotteryPage> {
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Bet Success'),
+          title: const Text(
+            'Bet Success',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+          ),
           content: Text(
             targetSlots.isNotEmpty
-                ? 'Ticket submitted successfully.\nLines: $placedLines\nAdvance slots: ${targetSlots.length}'
-                : 'Ticket submitted successfully.\nLines: $placedLines',
+                ? 'Ticket submitted successfully.\nAdvance slots: ${targetSlots.length}'
+                : 'Ticket submitted successfully.',
+            style: const TextStyle(fontSize: 13),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('OK'),
+              child: const Text('OK', style: TextStyle(fontSize: 13)),
             ),
           ],
         ),
@@ -350,6 +388,230 @@ class _LotteryPageState extends State<LotteryPage> {
     } finally {
       if (mounted) setState(() => _buying = false);
     }
+  }
+
+  Future<List<_BetPreviewLine>?> _showBetPreviewDialog(
+    List<_BetPreviewLine> lines,
+  ) async {
+    final draft = List<_BetPreviewLine>.from(lines);
+    return showDialog<List<_BetPreviewLine>>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setModalState) {
+            final total = draft.fold<int>(0, (sum, e) => sum + e.amount);
+            final drawTime = _formatTimeNoSeconds(_nextDrawAt());
+            return Dialog(
+              backgroundColor: const Color(0xFF0E1A37),
+              insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18),
+                side: const BorderSide(color: Color(0xFF1D2A4C)),
+              ),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: 760,
+                  maxHeight: MediaQuery.of(ctx).size.height * 0.88,
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Flexible(
+                        child: SingleChildScrollView(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                      const Text(
+                        'You want to place bet?',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      RichText(
+                        text: TextSpan(
+                          style: const TextStyle(
+                            color: Color(0xFFD1D5DB),
+                            fontSize: 12,
+                          ),
+                          children: [
+                            TextSpan(text: 'Total Bets: ${draft.length} | Total Amount: '),
+                            TextSpan(
+                              text: '₹$total',
+                              style: const TextStyle(
+                                color: Color(0xFFFACC15),
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      RichText(
+                        text: TextSpan(
+                          style: const TextStyle(
+                            color: Color(0xFFD1D5DB),
+                            fontSize: 12,
+                          ),
+                          children: [
+                            const TextSpan(text: 'Draw Time: '),
+                            TextSpan(
+                              text: drawTime,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Container(
+                        constraints: const BoxConstraints(maxHeight: 260),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF07132E),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFF2A3A60)),
+                        ),
+                        child: ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: draft.length,
+                          separatorBuilder: (_, __) =>
+                              const Divider(height: 1, color: Color(0xFF2A3A60)),
+                          itemBuilder: (context, index) {
+                            final line = draft[index];
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      'Quiz ${line.quizId.toString().padLeft(2, '0')}  |  No. ${line.number.toString().padLeft(2, '0')}  |  ₹${line.amount}',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  SizedBox(
+                                    height: 36,
+                                    child: ElevatedButton(
+                                      onPressed: () {
+                                        setModalState(() => draft.removeAt(index));
+                                      },
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: const Color(0xFFB91C1C),
+                                        foregroundColor: Colors.white,
+                                        padding: const EdgeInsets.symmetric(horizontal: 14),
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(8),
+                                          side: const BorderSide(color: Color(0xFFEF4444)),
+                                        ),
+                                      ),
+                                      child: const Text(
+                                        'Remove',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: SizedBox(
+                              height: 42,
+                              child: OutlinedButton(
+                                onPressed: () => Navigator.of(ctx).pop(null),
+                                style: OutlinedButton.styleFrom(
+                                  side: const BorderSide(color: Color(0xFF3B4A72)),
+                                  foregroundColor: Colors.white,
+                                  backgroundColor: const Color(0xFF1A2746),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 0,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                                child: const Text(
+                                  'Cancel',
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w600,
+                                    height: 1,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: SizedBox(
+                              height: 42,
+                              child: ElevatedButton(
+                                onPressed: draft.isEmpty
+                                    ? null
+                                    : () => Navigator.of(ctx).pop(
+                                          List<_BetPreviewLine>.from(draft),
+                                        ),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF38BDF8),
+                                  foregroundColor: Colors.white,
+                                  side: const BorderSide(color: Color(0xFF0EA5E9)),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 0,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                                child: const Text(
+                                  'BUY',
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w700,
+                                    height: 1,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   String _pad2(int n) => n.toString().padLeft(2, '0');
@@ -567,27 +829,36 @@ class _LotteryPageState extends State<LotteryPage> {
   }
 
   void _handleKeypad(String key) {
-    setState(() {
-      if (key == 'C') {
-        _amountDraft = '';
-        return;
-      }
-      if (key == 'X') {
+    if (key == 'X') {
+      setState(() {
         _amountDraft = _amountDraft.isEmpty
             ? ''
             : _amountDraft.substring(0, _amountDraft.length - 1);
-        return;
-      }
+      });
+      return;
+    }
+
+    setState(() {
+      if (_amountDraft.isEmpty && key == '0') return;
       final next = (_amountDraft == '0' ? key : '$_amountDraft$key');
-      _amountDraft = next.length > 4 ? next.substring(0, 4) : next;
+      _amountDraft = next.length > 3 ? next.substring(0, 3) : next;
     });
   }
 
   void _handleEnterAmount() {
+    _submitEnteredAmount(_amountDraft);
+  }
+
+  void _submitEnteredAmount(String draft) {
+    final parsed = int.tryParse(draft.isEmpty ? '0' : draft) ?? 0;
+    if (parsed < 1 || parsed > 999) {
+      _showNote('Please enter an amount between 1 and 999.');
+      return;
+    }
     setState(() {
       if (_pendingTarget != null) {
         _applyAmountToTarget(
-          int.tryParse(_amountDraft.isEmpty ? '0' : _amountDraft) ?? 0,
+          parsed,
           _pendingTarget,
         );
         _appliedAmountByTarget.clear();
@@ -775,6 +1046,7 @@ class _LotteryPageState extends State<LotteryPage> {
                                     activeQuiz: _activeQuiz,
                                     selectedMap: _selectedMap,
                                     activeTarget: _pendingTarget,
+                                    amountDraft: _amountDraft,
                                     activeFilter: _activeFilter,
                                     rowPointDisplay: _rowPointDisplay,
                                     colPointDisplay: _colPointDisplay,
@@ -1233,7 +1505,7 @@ class _QuizSelector extends StatelessWidget {
                                     overflow: TextOverflow.ellipsis,
                                     style: const TextStyle(
                                       color: Colors.white,
-                                      fontSize: 18,
+                                      fontSize: 20,
                                       fontWeight: FontWeight.w600,
                                     ),
                                   ),
@@ -1386,10 +1658,14 @@ class _QuizRightAction extends StatelessWidget {
               side: BorderSide(color: Color(0xFF1C87CD)),
             ),
             foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 0),
           ),
           child: const Text(
             'Old Results',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+            maxLines: 1,
+            softWrap: false,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
           ),
         ),
       );
@@ -1419,7 +1695,7 @@ class _QuizRightAction extends StatelessWidget {
             isAll ? 'All' : 'Multi',
             style: const TextStyle(
               color: Colors.white,
-              fontSize: 18,
+              fontSize: 20,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -1476,6 +1752,7 @@ class _NumberBoard extends StatelessWidget {
     required this.activeQuiz,
     required this.selectedMap,
     required this.activeTarget,
+    required this.amountDraft,
     required this.activeFilter,
     required this.rowPointDisplay,
     required this.colPointDisplay,
@@ -1485,6 +1762,7 @@ class _NumberBoard extends StatelessWidget {
   final int activeQuiz;
   final Map<String, int> selectedMap;
   final _Target? activeTarget;
+  final String amountDraft;
   final String activeFilter;
   final List<String> rowPointDisplay;
   final List<String> colPointDisplay;
@@ -1536,6 +1814,9 @@ class _NumberBoard extends StatelessWidget {
                 final selected =
                     activeTarget?.type == _TargetType.col &&
                     activeTarget?.index == i;
+                final colDisplay = selected && amountDraft.isNotEmpty
+                    ? amountDraft
+                    : colPointDisplay[i];
                 Color border = const Color(0xFF3EA1DE);
                 Color bg = Colors.white;
                 if (!hasVisibleInCol) {
@@ -1563,7 +1844,7 @@ class _NumberBoard extends StatelessWidget {
                           padding: EdgeInsets.zero,
                         ),
                         child: Text(
-                          colPointDisplay[i],
+                          colDisplay,
                           style: const TextStyle(
                             color: Color(0xFFD4A5B0),
                             fontSize: 12,
@@ -1592,6 +1873,9 @@ class _NumberBoard extends StatelessWidget {
                     final rowSelected =
                         activeTarget?.type == _TargetType.row &&
                         activeTarget?.index == row;
+                    final rowDisplay = rowSelected && amountDraft.isNotEmpty
+                        ? amountDraft
+                        : rowPointDisplay[row];
                     return Padding(
                       padding: EdgeInsets.only(bottom: row == 9 ? 0 : rowGap),
                       child: SizedBox(
@@ -1621,7 +1905,7 @@ class _NumberBoard extends StatelessWidget {
                                     padding: EdgeInsets.zero,
                                   ),
                                   child: Text(
-                                    rowPointDisplay[row],
+                                    rowDisplay,
                                     style: const TextStyle(
                                       color: Color(0xFFD4A5B0),
                                       fontSize: 12,
@@ -1634,7 +1918,14 @@ class _NumberBoard extends StatelessWidget {
                             ...rowNums.map((num) {
                               final visible = _isVisible(num);
                               final key = '$activeQuiz-$num';
-                              final value = selectedMap[key];
+                              final committedValue = selectedMap[key];
+                              final isActiveCell =
+                                  activeTarget?.type == _TargetType.cell &&
+                                  activeTarget?.index == num;
+                              final draftValue = isActiveCell && amountDraft.isNotEmpty
+                                  ? int.tryParse(amountDraft)
+                                  : null;
+                              final value = draftValue ?? committedValue;
                               final selected = value != null && value > 0;
                               final targetSelected =
                                   (activeTarget?.type == _TargetType.cell &&
@@ -1848,8 +2139,8 @@ class _SummaryPanel extends StatelessWidget {
               bg: bg,
               left: '${rows[idx].$1}',
               right: '${rows[idx].$2}',
-              textColor: const Color(0xFFF3E77D),
-              textSize: 26,
+              textColor: Colors.black,
+              textSize: 30,
             );
           }),
           ...List.generate(
@@ -1859,19 +2150,19 @@ class _SummaryPanel extends StatelessWidget {
               bg: Color(0xFF98ACCF),
               left: '0',
               right: '0',
-              textColor: Colors.white,
-              textSize: 24,
+              textColor: Colors.black,
+              textSize: 28,
             ),
           ),
           _SummaryDoubleRow(
             height: 56,
-            bg: const Color(0xFF85E65C),
+            bg: const Color(0xFFD0D0D0),
             left: 'TOTAL',
             right: '$totalAmount',
             leftBold: true,
             rightBold: true,
-            textColor: const Color(0xFFF3E77D),
-            leftTextColor: Colors.white,
+            textColor: Colors.black,
+            leftTextColor: Colors.black,
             textSize: 26,
             leftTextSize: 20,
           ),
@@ -1883,18 +2174,18 @@ class _SummaryPanel extends StatelessWidget {
               style: ElevatedButton.styleFrom(
                 elevation: 0,
                 disabledBackgroundColor: const Color(
-                  0xFFEF3F34,
+                  0xFFD0D0D0,
                 ).withValues(alpha: 0.5),
-                backgroundColor: const Color(0xFFEF3F34),
+                backgroundColor: const Color(0xFFD0D0D0),
                 shape: const RoundedRectangleBorder(
                   borderRadius: BorderRadius.zero,
-                  side: BorderSide(color: Color(0xFFD3372F)),
+                  side: BorderSide(color: Color(0xFF8A8A8A)),
                 ),
               ),
               child: const Text(
                 'BUY',
                 style: TextStyle(
-                  color: Colors.white,
+                  color: Colors.black,
                   fontSize: 38,
                   fontWeight: FontWeight.w600,
                   height: 1,
@@ -1943,7 +2234,7 @@ class _SummaryDoubleRow extends StatelessWidget {
           Expanded(
             child: Container(
               decoration: BoxDecoration(
-                border: Border.all(color: const Color(0xFFB8C0CA)),
+                border: Border.all(color: Colors.black, width: 0.8),
               ),
               alignment: Alignment.center,
               child: Text(
@@ -1960,7 +2251,7 @@ class _SummaryDoubleRow extends StatelessWidget {
           Expanded(
             child: Container(
               decoration: BoxDecoration(
-                border: Border.all(color: const Color(0xFFB8C0CA)),
+                border: Border.all(color: Colors.black, width: 0.8),
               ),
               alignment: Alignment.center,
               child: Text(
@@ -2007,7 +2298,6 @@ class _ControlPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', 'C', 'X'];
     return Container(
       width: 240,
       padding: const EdgeInsets.all(8),
@@ -2128,56 +2418,85 @@ class _ControlPanel extends StatelessWidget {
             child: LayoutBuilder(
               builder: (context, constraints) {
                 const spacing = 5.0;
-                const columns = 4.0;
-                const rows = 3.0;
-                final tileWidth =
-                    (constraints.maxWidth - ((columns - 1) * spacing)) /
-                    columns;
                 final tileHeight =
-                    (constraints.maxHeight - ((rows - 1) * spacing)) / rows;
-                final ratio = tileWidth > 0 && tileHeight > 0
-                    ? tileWidth / tileHeight
-                    : 1.0;
+                    (constraints.maxHeight - (spacing * 3)) / 4;
 
-                return GridView.builder(
-                  physics: const NeverScrollableScrollPhysics(),
-                  itemCount: keys.length,
-                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: columns.toInt(),
-                    crossAxisSpacing: spacing,
-                    mainAxisSpacing: spacing,
-                    childAspectRatio: ratio,
-                  ),
-                  itemBuilder: (context, index) {
-                    final k = keys[index];
-                    final isRed = k == 'C' || k == 'X';
-                    return ElevatedButton(
-                      onPressed: () => onKeypad(k),
-                      style: ElevatedButton.styleFrom(
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(2),
-                          side: BorderSide(
-                            color: isRed
-                                ? const Color(0xFFD63F35)
-                                : const Color(0xFF8A8A8A),
+                Widget keypadButton(String k, {int flex = 1}) {
+                  final isRed = k == 'X';
+                  return Expanded(
+                    flex: flex,
+                    child: SizedBox(
+                      height: tileHeight,
+                      child: ElevatedButton(
+                        onPressed: () => onKeypad(k),
+                        style: ElevatedButton.styleFrom(
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(2),
+                            side: BorderSide(
+                              color: isRed
+                                  ? const Color(0xFFD63F35)
+                                  : const Color(0xFF8A8A8A),
+                            ),
+                          ),
+                          backgroundColor: isRed
+                              ? const Color(0xFFF04438)
+                              : const Color(0xFFF4F4F4),
+                          foregroundColor: isRed ? Colors.white : Colors.black,
+                          padding: EdgeInsets.zero,
+                        ),
+                        child: Text(
+                          k,
+                          style: const TextStyle(
+                            fontSize: 30,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
-                        backgroundColor: isRed
-                            ? const Color(0xFFF04438)
-                            : const Color(0xFFF4F4F4),
-                        foregroundColor: isRed ? Colors.white : Colors.black,
-                        padding: EdgeInsets.zero,
                       ),
-                      child: Text(
-                        k,
-                        style: const TextStyle(
-                          fontSize: 30,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    );
-                  },
+                    ),
+                  );
+                }
+
+                return Column(
+                  children: [
+                    Row(
+                      children: [
+                        keypadButton('1'),
+                        const SizedBox(width: spacing),
+                        keypadButton('2'),
+                        const SizedBox(width: spacing),
+                        keypadButton('3'),
+                      ],
+                    ),
+                    const SizedBox(height: spacing),
+                    Row(
+                      children: [
+                        keypadButton('4'),
+                        const SizedBox(width: spacing),
+                        keypadButton('5'),
+                        const SizedBox(width: spacing),
+                        keypadButton('6'),
+                      ],
+                    ),
+                    const SizedBox(height: spacing),
+                    Row(
+                      children: [
+                        keypadButton('7'),
+                        const SizedBox(width: spacing),
+                        keypadButton('8'),
+                        const SizedBox(width: spacing),
+                        keypadButton('9'),
+                      ],
+                    ),
+                    const SizedBox(height: spacing),
+                    Row(
+                      children: [
+                        keypadButton('0'),
+                        const SizedBox(width: spacing),
+                        keypadButton('X', flex: 2),
+                      ],
+                    ),
+                  ],
                 );
               },
             ),
@@ -2368,6 +2687,18 @@ class _SetTotals {
   final int setBAmount;
   final int setCCount;
   final int setCAmount;
+}
+
+class _BetPreviewLine {
+  const _BetPreviewLine({
+    required this.quizId,
+    required this.number,
+    required this.amount,
+  });
+
+  final int quizId;
+  final int number;
+  final int amount;
 }
 
 enum _TargetType { cell, row, col }

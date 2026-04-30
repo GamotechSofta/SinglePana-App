@@ -17,6 +17,8 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
   bool _loading = true;
   String _error = '';
   List<_QuizGroup> _groups = const [];
+  _DrawFilter _drawFilter = _DrawFilter.all;
+  DateTime _selectedDate = DateTime.now();
 
   @override
   void initState() {
@@ -74,7 +76,14 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
       }
     }
     final groups = map.values.toList()
-      ..sort((a, b) => b.slotStartIso.compareTo(a.slotStartIso));
+      ..sort((a, b) {
+        // Show Normal Draw groups before Advance Draw groups.
+        final drawTypeOrder = (a.isAdvanceDraw ? 1 : 0).compareTo(
+          b.isAdvanceDraw ? 1 : 0,
+        );
+        if (drawTypeOrder != 0) return drawTypeOrder;
+        return b.slotStartIso.compareTo(a.slotStartIso);
+      });
     for (final g in groups) {
       g.lines.sort((a, b) {
         final an = int.tryParse('${a['number'] ?? ''}') ?? 0;
@@ -101,7 +110,13 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
         });
         return;
       }
-      final uri = Uri.parse('$kApiBaseUrl/quiz/my-quiz-bets?limit=120&mode=2d');
+      final dateKey =
+          '${_selectedDate.year.toString().padLeft(4, '0')}-'
+          '${_selectedDate.month.toString().padLeft(2, '0')}-'
+          '${_selectedDate.day.toString().padLeft(2, '0')}';
+      final uri = Uri.parse(
+        '$kApiBaseUrl/quiz/my-quiz-bets?limit=120&mode=2d&date=${Uri.encodeQueryComponent(dateKey)}',
+      );
       final res = await http.get(uri, headers: headers);
       final body = jsonDecode(res.body) as Map<String, dynamic>?;
 
@@ -144,13 +159,18 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
 
   @override
   Widget build(BuildContext context) {
+    final visibleGroups = _groups.where((g) {
+      if (_drawFilter == _DrawFilter.all) return true;
+      if (_drawFilter == _DrawFilter.normal) return !g.isAdvanceDraw;
+      return g.isAdvanceDraw;
+    }).toList();
     return Container(
       color: const Color(0xFFF1F1F1),
       child: Column(
         children: [
           Container(
             color: const Color(0xFFE3E3E3),
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
             child: Row(
               children: [
                 IconButton(
@@ -163,11 +183,21 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
                     'My_Bets_2DLottery',
                     style: TextStyle(
                       color: Colors.black,
-                      fontSize: 14,
+                      fontSize: 11,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
                 ),
+                OutlinedButton(
+                  onPressed: _pickDate,
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Color(0xFF666666)),
+                    backgroundColor: Colors.white,
+                    foregroundColor: Colors.black,
+                  ),
+                  child: Text(_formatDateChip(_selectedDate)),
+                ),
+                const SizedBox(width: 8),
                 OutlinedButton(
                   onPressed: _load,
                   style: OutlinedButton.styleFrom(
@@ -210,208 +240,251 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
                               style: TextStyle(color: Color(0xFF4B5563), fontWeight: FontWeight.w600),
                             ),
                           )
-                        : ListView.builder(
-                            padding: const EdgeInsets.all(10),
-                            itemCount: _groups.length,
-                            itemBuilder: (context, index) {
-                              final group = _groups[index];
-                              return Container(
-                                margin: const EdgeInsets.only(bottom: 10),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  border: Border.all(color: const Color(0xFFBBBBBB)),
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
+                        : Column(
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(10, 10, 10, 4),
+                                child: Row(
                                   children: [
-                                    Padding(
-                                      padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
-                                      child: Wrap(
-                                        spacing: 8,
-                                        runSpacing: 6,
-                                        children: [
-                                          Text(
-                                            'QUIZ${group.quizId.toString().padLeft(2, '0')}',
-                                            style: const TextStyle(
-                                              color: Color(0xFF1A4D6E),
-                                              fontWeight: FontWeight.w700,
-                                            ),
-                                          ),
-                                          Text(
-                                            'Draw: ${group.drawLabelEnd ?? '-'}',
-                                            style: const TextStyle(
-                                              color: Color(0xFF1A4D6E),
-                                              fontWeight: FontWeight.w700,
-                                            ),
-                                          ),
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                            decoration: BoxDecoration(
-                                              color: group.isAdvanceDraw ? const Color(0xFFE0E7FF) : const Color(0xFFDCFCE7),
-                                              borderRadius: BorderRadius.circular(6),
-                                            ),
-                                            child: Text(
-                                              group.isAdvanceDraw ? 'Advance Draw' : 'Normal Draw',
-                                              style: TextStyle(
-                                                color: group.isAdvanceDraw ? const Color(0xFF3730A3) : const Color(0xFF166534),
-                                                fontWeight: FontWeight.w700,
-                                              ),
-                                            ),
-                                          ),
-                                          if (group.slotEnded && group.winningNumber != null)
-                                            Container(
-                                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                              decoration: BoxDecoration(
-                                                color: const Color(0xFFF2F6FF),
-                                                borderRadius: BorderRadius.circular(6),
-                                              ),
-                                              child: Text(
-                                                'Winning: ${group.winningNumber}',
-                                                style: const TextStyle(
-                                                  color: Color(0xFF333333),
-                                                  fontWeight: FontWeight.w600,
-                                                ),
-                                              ),
-                                            ),
-                                        ],
-                                      ),
+                                    _FilterButton(
+                                      label: 'All',
+                                      selected: _drawFilter == _DrawFilter.all,
+                                      onTap: () => setState(() => _drawFilter = _DrawFilter.all),
                                     ),
-                                    LayoutBuilder(
-                                      builder: (context, constraints) {
-                                        final minTableWidth = constraints.maxWidth;
-                                        return SingleChildScrollView(
-                                          scrollDirection: Axis.horizontal,
-                                          child: ConstrainedBox(
-                                            constraints: BoxConstraints(minWidth: minTableWidth),
-                                            child: DataTableTheme(
-                                              data: const DataTableThemeData(
-                                                headingTextStyle: TextStyle(
-                                                  color: Colors.black,
-                                                  fontWeight: FontWeight.w700,
-                                                ),
-                                                dataTextStyle: TextStyle(
-                                                  color: Colors.black,
-                                                  fontWeight: FontWeight.w600,
-                                                ),
-                                              ),
-                                              child: DataTable(
-                                                headingRowColor: WidgetStateProperty.all(const Color(0xFFD9E4F5)),
-                                                dataRowColor: WidgetStateProperty.all(const Color(0xFFF8F8F8)),
-                                                columns: const [
-                                                  DataColumn(
-                                                    label: Text(
-                                                      'Quiz',
-                                                      style: TextStyle(color: Colors.black, fontWeight: FontWeight.w700),
-                                                    ),
-                                                  ),
-                                                  DataColumn(
-                                                    label: Text(
-                                                      'Number',
-                                                      style: TextStyle(color: Colors.black, fontWeight: FontWeight.w700),
-                                                    ),
-                                                  ),
-                                                  DataColumn(
-                                                    label: Text(
-                                                      'Amount',
-                                                      style: TextStyle(color: Colors.black, fontWeight: FontWeight.w700),
-                                                    ),
-                                                  ),
-                                                  DataColumn(
-                                                    label: Text(
-                                                      'Status',
-                                                      style: TextStyle(color: Colors.black, fontWeight: FontWeight.w700),
-                                                    ),
-                                                  ),
-                                                  DataColumn(
-                                                    label: Text(
-                                                      'Win Amount',
-                                                      style: TextStyle(color: Colors.black, fontWeight: FontWeight.w700),
-                                                    ),
-                                                  ),
-                                                  DataColumn(
-                                                    label: Text(
-                                                      'Draw Type',
-                                                      style: TextStyle(color: Colors.black, fontWeight: FontWeight.w700),
-                                                    ),
-                                                  ),
-                                                  DataColumn(
-                                                    label: Text(
-                                                      'Action',
-                                                      style: TextStyle(color: Colors.black, fontWeight: FontWeight.w700),
-                                                    ),
-                                                  ),
-                                                ],
-                                                rows: [
-                                                  for (final row in group.lines)
-                                                    () {
-                                                      final status = _displayStatus(row, group);
-                                                      final statusColor = status == 'win'
-                                                          ? const Color(0xFF15803D)
-                                                          : status == 'lose'
-                                                              ? const Color(0xFFB91C1C)
-                                                              : const Color(0xFFB45309);
-                                                      final winPayout = num.tryParse('${row['winPayout'] ?? ''}') ?? 0;
-                                                      return DataRow(
-                                                        cells: [
-                                                          DataCell(
-                                                            Text(
-                                                              'Q${group.quizId.toString().padLeft(2, '0')}',
-                                                              style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w700),
-                                                            ),
-                                                          ),
-                                                          DataCell(
-                                                            Text(
-                                                              '${row['number'] ?? ''}'.padLeft(2, '0'),
-                                                              style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w700),
-                                                            ),
-                                                          ),
-                                                          DataCell(
-                                                            Text(
-                                                              '₹${row['amount'] ?? 0}',
-                                                              style: const TextStyle(color: Colors.black),
-                                                            ),
-                                                          ),
-                                                          DataCell(
-                                                            Text(
-                                                              _statusLabel(status),
-                                                              style: TextStyle(color: statusColor, fontWeight: FontWeight.w600),
-                                                            ),
-                                                          ),
-                                                          DataCell(
-                                                            Text(
-                                                              status == 'win'
-                                                                  ? (winPayout > 0 ? '₹$winPayout' : 'Processing...')
-                                                                  : '-',
-                                                              style: const TextStyle(color: Colors.black),
-                                                            ),
-                                                          ),
-                                                          DataCell(
-                                                            Text(
-                                                              group.isAdvanceDraw ? 'Advance' : 'Normal',
-                                                              style: const TextStyle(color: Colors.black),
-                                                            ),
-                                                          ),
-                                                          DataCell(
-                                                            TextButton(
-                                                              onPressed: () => _showLineDetails(group, row),
-                                                              child: const Text('View'),
-                                                            ),
-                                                          ),
-                                                        ],
-                                                      );
-                                                    }(),
-                                                ],
-                                              ),
-                                            ),
-                                          ),
-                                        );
-                                      },
+                                    const SizedBox(width: 8),
+                                    _FilterButton(
+                                      label: 'Normal Draw',
+                                      selected: _drawFilter == _DrawFilter.normal,
+                                      onTap: () => setState(() => _drawFilter = _DrawFilter.normal),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    _FilterButton(
+                                      label: 'Advance Draw',
+                                      selected: _drawFilter == _DrawFilter.advance,
+                                      onTap: () => setState(() => _drawFilter = _DrawFilter.advance),
                                     ),
                                   ],
                                 ),
-                              );
-                            },
+                              ),
+                              Expanded(
+                                child: visibleGroups.isEmpty
+                                    ? const Center(
+                                        child: Text(
+                                          'No tickets found for selected filter.',
+                                          style: TextStyle(color: Color(0xFF4B5563), fontWeight: FontWeight.w600),
+                                        ),
+                                      )
+                                    : ListView.builder(
+                                        padding: const EdgeInsets.fromLTRB(10, 6, 10, 10),
+                                        itemCount: visibleGroups.length,
+                                        itemBuilder: (context, index) {
+                                          final group = visibleGroups[index];
+                                          return Container(
+                                            margin: const EdgeInsets.only(bottom: 10),
+                                            decoration: BoxDecoration(
+                                              color: Colors.white,
+                                              border: Border.all(color: const Color(0xFFBBBBBB)),
+                                              borderRadius: BorderRadius.circular(6),
+                                            ),
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Padding(
+                                                  padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
+                                                  child: Wrap(
+                                                    spacing: 8,
+                                                    runSpacing: 6,
+                                                    children: [
+                                                      Text(
+                                                        'QUIZ${group.quizId.toString().padLeft(2, '0')}',
+                                                        style: const TextStyle(
+                                                          color: Color(0xFF1A4D6E),
+                                                          fontSize: 11,
+                                                          fontWeight: FontWeight.w700,
+                                                        ),
+                                                      ),
+                                                      Text(
+                                                        'Draw: ${group.drawLabelEnd ?? '-'}',
+                                                        style: const TextStyle(
+                                                          color: Color(0xFF1A4D6E),
+                                                          fontSize: 11,
+                                                          fontWeight: FontWeight.w700,
+                                                        ),
+                                                      ),
+                                                      Container(
+                                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                                        decoration: BoxDecoration(
+                                                          color: group.isAdvanceDraw ? const Color(0xFFE0E7FF) : const Color(0xFFDCFCE7),
+                                                          borderRadius: BorderRadius.circular(6),
+                                                        ),
+                                                        child: Text(
+                                                          group.isAdvanceDraw ? 'Advance Draw' : 'Normal Draw',
+                                                          style: TextStyle(
+                                                            color: group.isAdvanceDraw ? const Color(0xFF3730A3) : const Color(0xFF166534),
+                                                            fontSize: 10,
+                                                            fontWeight: FontWeight.w700,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                      if (group.slotEnded && group.winningNumber != null)
+                                                        Container(
+                                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                                          decoration: BoxDecoration(
+                                                            color: const Color(0xFFF2F6FF),
+                                                            borderRadius: BorderRadius.circular(6),
+                                                          ),
+                                                          child: Text(
+                                                            'Winning: ${group.winningNumber}',
+                                                            style: const TextStyle(
+                                                              color: Color(0xFF333333),
+                                                              fontSize: 10,
+                                                              fontWeight: FontWeight.w600,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                    ],
+                                                  ),
+                                                ),
+                                                LayoutBuilder(
+                                                  builder: (context, constraints) {
+                                                    final minTableWidth = constraints.maxWidth;
+                                                    return SingleChildScrollView(
+                                                      scrollDirection: Axis.horizontal,
+                                                      child: ConstrainedBox(
+                                                        constraints: BoxConstraints(minWidth: minTableWidth),
+                                                        child: DataTableTheme(
+                                                          data: const DataTableThemeData(
+                                                            headingTextStyle: TextStyle(
+                                                              color: Colors.black,
+                                                              fontSize: 11,
+                                                              fontWeight: FontWeight.w700,
+                                                            ),
+                                                            dataTextStyle: TextStyle(
+                                                              color: Colors.black,
+                                                              fontSize: 10,
+                                                              fontWeight: FontWeight.w600,
+                                                            ),
+                                                          ),
+                                                          child: DataTable(
+                                                            headingRowColor: WidgetStateProperty.all(const Color(0xFFD9E4F5)),
+                                                            dataRowColor: WidgetStateProperty.all(const Color(0xFFF8F8F8)),
+                                                            columns: const [
+                                                              DataColumn(
+                                                                label: Text(
+                                                                  'Quiz',
+                                                                  style: TextStyle(color: Colors.black, fontSize: 11, fontWeight: FontWeight.w700),
+                                                                ),
+                                                              ),
+                                                              DataColumn(
+                                                                label: Text(
+                                                                  'Number',
+                                                                  style: TextStyle(color: Colors.black, fontSize: 11, fontWeight: FontWeight.w700),
+                                                                ),
+                                                              ),
+                                                              DataColumn(
+                                                                label: Text(
+                                                                  'Amount',
+                                                                  style: TextStyle(color: Colors.black, fontSize: 11, fontWeight: FontWeight.w700),
+                                                                ),
+                                                              ),
+                                                              DataColumn(
+                                                                label: Text(
+                                                                  'Status',
+                                                                  style: TextStyle(color: Colors.black, fontSize: 11, fontWeight: FontWeight.w700),
+                                                                ),
+                                                              ),
+                                                              DataColumn(
+                                                                label: Text(
+                                                                  'Win Amount',
+                                                                  style: TextStyle(color: Colors.black, fontSize: 11, fontWeight: FontWeight.w700),
+                                                                ),
+                                                              ),
+                                                              DataColumn(
+                                                                label: Text(
+                                                                  'Draw Type',
+                                                                  style: TextStyle(color: Colors.black, fontSize: 11, fontWeight: FontWeight.w700),
+                                                                ),
+                                                              ),
+                                                              DataColumn(
+                                                                label: Text(
+                                                                  'Action',
+                                                                  style: TextStyle(color: Colors.black, fontSize: 11, fontWeight: FontWeight.w700),
+                                                                ),
+                                                              ),
+                                                            ],
+                                                            rows: [
+                                                              for (final row in group.lines)
+                                                                () {
+                                                                  final status = _displayStatus(row, group);
+                                                                  final statusColor = status == 'win'
+                                                                      ? const Color(0xFF15803D)
+                                                                      : status == 'lose'
+                                                                          ? const Color(0xFFB91C1C)
+                                                                          : const Color(0xFFB45309);
+                                                                  final winPayout = num.tryParse('${row['winPayout'] ?? ''}') ?? 0;
+                                                                  return DataRow(
+                                                                    cells: [
+                                                                      DataCell(
+                                                                        Text(
+                                                                          'Q${group.quizId.toString().padLeft(2, '0')}',
+                                                                          style: const TextStyle(color: Colors.black, fontSize: 10, fontWeight: FontWeight.w700),
+                                                                        ),
+                                                                      ),
+                                                                      DataCell(
+                                                                        Text(
+                                                                          '${row['number'] ?? ''}'.padLeft(2, '0'),
+                                                                          style: const TextStyle(color: Colors.black, fontSize: 10, fontWeight: FontWeight.w700),
+                                                                        ),
+                                                                      ),
+                                                                      DataCell(
+                                                                        Text(
+                                                                          '₹${row['amount'] ?? 0}',
+                                                                          style: const TextStyle(color: Colors.black, fontSize: 10),
+                                                                        ),
+                                                                      ),
+                                                                      DataCell(
+                                                                        Text(
+                                                                          _statusLabel(status),
+                                                                          style: TextStyle(color: statusColor, fontSize: 10, fontWeight: FontWeight.w600),
+                                                                        ),
+                                                                      ),
+                                                                      DataCell(
+                                                                        Text(
+                                                                          status == 'win'
+                                                                              ? (winPayout > 0 ? '₹$winPayout' : 'Processing...')
+                                                                              : '-',
+                                                                          style: const TextStyle(color: Colors.black, fontSize: 10),
+                                                                        ),
+                                                                      ),
+                                                                      DataCell(
+                                                                        Text(
+                                                                          group.isAdvanceDraw ? 'Advance' : 'Normal',
+                                                                          style: const TextStyle(color: Colors.black, fontSize: 10),
+                                                                        ),
+                                                                      ),
+                                                                      DataCell(
+                                                                        TextButton(
+                                                                          onPressed: () => _showLineDetails(group, row),
+                                                                          child: const Text('View'),
+                                                                        ),
+                                                                      ),
+                                                                    ],
+                                                                  );
+                                                                }(),
+                                                            ],
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    );
+                                                  },
+                                                ),
+                                              ],
+                                            ),
+                                          );
+                                        },
+                                      ),
+                              ),
+                            ],
                           ),
           ),
         ],
@@ -444,6 +517,27 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
       ),
     );
   }
+
+  String _formatDateChip(DateTime d) {
+    final dd = d.day.toString().padLeft(2, '0');
+    final mm = d.month.toString().padLeft(2, '0');
+    final yyyy = d.year.toString().padLeft(4, '0');
+    return '$dd/$mm/$yyyy';
+  }
+
+  Future<void> _pickDate() async {
+    final today = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate.isAfter(today) ? today : _selectedDate,
+      firstDate: DateTime(2020, 1, 1),
+      lastDate: DateTime(today.year, today.month, today.day),
+      helpText: 'Select ticket date',
+    );
+    if (!mounted || picked == null) return;
+    setState(() => _selectedDate = picked);
+    await _load();
+  }
 }
 
 class _QuizGroup {
@@ -464,4 +558,39 @@ class _QuizGroup {
   final String? winningNumber;
   final bool isAdvanceDraw;
   final List<Map<String, dynamic>> lines;
+}
+
+enum _DrawFilter { all, normal, advance }
+
+class _FilterButton extends StatelessWidget {
+  const _FilterButton({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton(
+      onPressed: onTap,
+      style: OutlinedButton.styleFrom(
+        backgroundColor: selected ? const Color(0xFF2D9DE8) : Colors.white,
+        foregroundColor: selected ? Colors.white : Colors.black87,
+        side: BorderSide(
+          color: selected ? const Color(0xFF1C87CD) : const Color(0xFF9CA3AF),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        minimumSize: const Size(0, 30),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+      ),
+    );
+  }
 }

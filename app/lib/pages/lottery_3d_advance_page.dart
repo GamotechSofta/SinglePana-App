@@ -130,15 +130,10 @@ class _Lottery3DAdvancePageState extends State<Lottery3DAdvancePage> {
                   ),
                 ),
                 Expanded(
-                  child: GridView.builder(
+                  child: ListView.separated(
                     padding: const EdgeInsets.all(10),
                     itemCount: widget.slotOptions.length,
-                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 8,
-                      mainAxisSpacing: 3,
-                      crossAxisSpacing: 3,
-                      childAspectRatio: 2.2,
-                    ),
+                    separatorBuilder: (_, __) => const SizedBox(height: 6),
                     itemBuilder: (context, i) {
                       final slot = widget.slotOptions[i];
                       final iso = slot['slotStartIso'] ?? '';
@@ -155,23 +150,45 @@ class _Lottery3DAdvancePageState extends State<Lottery3DAdvancePage> {
                           });
                         },
                         child: Container(
-                          alignment: Alignment.center,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 8,
+                          ),
                           decoration: BoxDecoration(
-                            color: checked ? const Color(0xFF1D4ED8) : Colors.white,
+                            color: checked
+                                ? const Color(0xFF1D4ED8)
+                                : Colors.white,
                             border: Border.all(
-                              color: checked ? const Color(0xFF1E40AF) : const Color(0xFFCBD5E1),
+                              color: checked
+                                  ? const Color(0xFF1E40AF)
+                                  : const Color(0xFFCBD5E1),
                               width: 1.2,
                             ),
                             borderRadius: BorderRadius.circular(6),
                           ),
-                          child: Text(
-                            label,
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w800,
-                              color: checked ? Colors.white : Colors.black,
-                            ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                checked
+                                    ? Icons.check_box
+                                    : Icons.check_box_outline_blank,
+                                color: checked
+                                    ? Colors.white
+                                    : const Color(0xFF334155),
+                                size: 18,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  label,
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w800,
+                                    color: checked ? Colors.white : Colors.black,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       );

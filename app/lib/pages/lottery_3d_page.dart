@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 
 import '../config/api_config.dart';
 import 'lottery_3d_advance_page.dart';
+import 'lottery_3d_subpages.dart';
 import '../services/auth_service.dart';
 import '../services/wallet_service.dart';
 
@@ -77,6 +78,7 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
   Timer? _clockTicker;
   Timer? _slotTicker;
   bool _restoringPortrait = false;
+  bool _keepLandscapeOnExit = false;
   bool _booting = true;
 
   DateTime _now = DateTime.now();
@@ -140,6 +142,9 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
   void dispose() {
     _clockTicker?.cancel();
     _slotTicker?.cancel();
+    if (!_keepLandscapeOnExit) {
+      unawaited(_restorePortraitOrientation());
+    }
     super.dispose();
   }
 
@@ -163,20 +168,21 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
   }
 
   Future<void> _exit3D() async {
-    if (!mounted) return;
     await _restorePortraitOrientation();
     if (!mounted) return;
-    Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
+    try {
+      await Navigator.of(context).pushNamedAndRemoveUntil('/home', (route) => false);
+    } catch (_) {
+      if (!mounted) return;
+      await Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
+    }
   }
 
-  Future<void> _goBackTo2DInLandscape() async {
-    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    await SystemChrome.setPreferredOrientations(const [
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
+  Future<void> _goBackTo2DGame() async {
+    _keepLandscapeOnExit = true;
+    await _configureOrientationForLottery();
     if (!mounted) return;
-    await Navigator.of(context).pushReplacementNamed('/lottery');
+    await Navigator.of(context).maybePop();
   }
 
   Future<Map<String, String>> _authHeaders() async {
@@ -189,15 +195,19 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
   Future<void> _loadCurrentUserInfo() async {
     try {
       final user = await AuthService.instance.getStoredUser();
-      final id = [
-        user?['userName'],
-        user?['name'],
-        user?['fullName'],
-        user?['username'],
-        user?['phone'],
-        user?['id'],
-        user?['_id'],
-      ].map((e) => e?.toString().trim() ?? '').firstWhere((e) => e.isNotEmpty, orElse: () => '');
+      String pick(List<String> keys) {
+        for (final k in keys) {
+          final v = user?[k];
+          if (v == null) continue;
+          final s = v.toString().trim();
+          if (s.isNotEmpty) return s;
+        }
+        return '';
+      }
+      final first = pick(['firstName', 'firstname', 'givenName']);
+      final last = pick(['lastName', 'lastname', 'surname']);
+      final full = '$first $last'.trim();
+      final id = full.isNotEmpty ? full : pick(['name', 'fullName', 'userName', 'username', 'phone', 'mobile']);
       if (!mounted) return;
       if (id.isNotEmpty) {
         setState(() => _playerId = id);
@@ -230,8 +240,24 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
       final body = jsonDecode(res.body) as Map<String, dynamic>?;
       if (!mounted) return;
       if (res.statusCode >= 200 && res.statusCode < 300 && body?['success'] == true && body?['data'] is Map) {
+        final incoming = Map<String, dynamic>.from(body!['data'] as Map);
         setState(() {
-          _serverSlot = Map<String, dynamic>.from(body!['data'] as Map);
+          _serverSlot = incoming;
+          // Frontend-like behavior: try to derive top A/B/C from current slot payload too.
+          _applyTopResultsFromSlotMap(incoming);
+          final possibleResultsKeys = [
+            'results',
+            'lastResults',
+            'currentResults',
+            'slotResults',
+            'quizResults',
+          ];
+          for (final key in possibleResultsKeys) {
+            final raw = incoming[key];
+            if (raw is List) {
+              _applyTopResultsFromSlotMap(<String, dynamic>{'results': raw, ...incoming});
+            }
+          }
           _slotSyncErr = '';
         });
       } else {
@@ -249,48 +275,102 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
     return digits.padLeft(3, '0').substring(math.max(0, digits.length - 3));
   }
 
+  bool _applyTopResultsFromSlotMap(Map<String, dynamic> slot) {
+    final results = <String, String>{
+      'A': _topResults['A'] ?? '---',
+      'B': _topResults['B'] ?? '---',
+      'C': _topResults['C'] ?? '---',
+    };
+    var changed = false;
+    final rawResults = slot['results'];
+    if (rawResults is List) {
+      for (final e in rawResults) {
+        if (e is! Map) continue;
+        final m = Map<String, dynamic>.from(e);
+        final quizId = int.tryParse('${m['quizId'] ?? m['quiz_id'] ?? m['quiz'] ?? ''}');
+        final panelRaw = '${m['panel'] ?? m['set'] ?? m['label'] ?? ''}'.trim().toUpperCase();
+        final result = '${m['result'] ?? m['value'] ?? m['number'] ?? ''}';
+        if ((quizId == 1 || panelRaw == 'A') && result.trim().isNotEmpty) {
+          results['A'] = _to3(result);
+          changed = true;
+        }
+        if ((quizId == 2 || panelRaw == 'B') && result.trim().isNotEmpty) {
+          results['B'] = _to3(result);
+          changed = true;
+        }
+        if ((quizId == 3 || panelRaw == 'C') && result.trim().isNotEmpty) {
+          results['C'] = _to3(result);
+          changed = true;
+        }
+      }
+    }
+    final fallbackA = slot['a'] ?? slot['A'] ?? slot['setA'] ?? slot['set_a'] ?? slot['resultA'] ?? slot['result_a'];
+    final fallbackB = slot['b'] ?? slot['B'] ?? slot['setB'] ?? slot['set_b'] ?? slot['resultB'] ?? slot['result_b'];
+    final fallbackC = slot['c'] ?? slot['C'] ?? slot['setC'] ?? slot['set_c'] ?? slot['resultC'] ?? slot['result_c'];
+    if (fallbackA != null && '$fallbackA'.trim().isNotEmpty) {
+      results['A'] = _to3('$fallbackA');
+      changed = true;
+    }
+    if (fallbackB != null && '$fallbackB'.trim().isNotEmpty) {
+      results['B'] = _to3('$fallbackB');
+      changed = true;
+    }
+    if (fallbackC != null && '$fallbackC'.trim().isNotEmpty) {
+      results['C'] = _to3('$fallbackC');
+      changed = true;
+    }
+    if (changed) {
+      _topResults
+        ..clear()
+        ..addAll(results);
+      _lastDrawLabel = (slot['drawLabelEnd'] ?? slot['timeLabel'] ?? _lastDrawLabel).toString();
+      _lastResultUpdatedAt = DateTime.now();
+    }
+    return changed;
+  }
+
   Future<void> _syncLastSlotResult() async {
     try {
-      final now = DateTime.now();
-      final dateKey =
-          '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-      final res = await http.get(
-        Uri.parse('$kApiBaseUrl/quiz/slot-results?date=${Uri.encodeQueryComponent(dateKey)}&maxSlots=1&mode=3d'),
-      );
+      final res = await http.get(Uri.parse('$kApiBaseUrl/quiz/slot-results?limit=1&mode=3d'));
       final body = jsonDecode(res.body) as Map<String, dynamic>?;
       if (!mounted) return;
       if (res.statusCode < 200 || res.statusCode >= 300 || body?['success'] != true) return;
       final data = body?['data'];
-      Map<String, dynamic>? slot;
-      if (data is List && data.isNotEmpty && data.first is Map) {
-        slot = Map<String, dynamic>.from(data.first as Map);
+      List<dynamic> slotList;
+      if (data is List) {
+        slotList = data;
       } else if (data is Map && data['slots'] is List) {
-        final slots = data['slots'] as List;
-        if (slots.isNotEmpty && slots.first is Map) {
-          slot = Map<String, dynamic>.from(slots.first as Map);
-        }
+        slotList = data['slots'] as List;
+      } else {
+        return;
       }
-      if (slot == null) return;
-      final resolvedSlot = slot;
-      final results = <String, String>{'A': '---', 'B': '---', 'C': '---'};
-      final rawResults = resolvedSlot['results'];
-      if (rawResults is List) {
-        for (final e in rawResults) {
-          if (e is! Map) continue;
-          final quizId = int.tryParse('${e['quizId'] ?? ''}');
-          final result = '${e['result'] ?? ''}';
-          if (quizId == 1) results['A'] = _to3(result);
-          if (quizId == 2) results['B'] = _to3(result);
-          if (quizId == 3) results['C'] = _to3(result);
-        }
-      }
+      if (slotList.isEmpty || slotList.first is! Map) return;
+      final slot = Map<String, dynamic>.from(slotList.first as Map);
+      var updated = false;
       setState(() {
-        _topResults
-          ..clear()
-          ..addAll(results);
-        _lastDrawLabel = (resolvedSlot['drawLabelEnd'] ?? resolvedSlot['timeLabel'] ?? '-').toString();
-        _lastResultUpdatedAt = DateTime.now();
+        updated = _applyTopResultsFromSlotMap(slot);
       });
+      // React page also uses date-based slot fetch fallback; do same when latest endpoint has no values.
+      if (!updated) {
+        final now = DateTime.now();
+        final dayKey =
+            '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+        final res2 = await http.get(Uri.parse('$kApiBaseUrl/quiz/slot-results?date=$dayKey&mode=3d&limit=96'));
+        final body2 = jsonDecode(res2.body) as Map<String, dynamic>?;
+        if (!mounted) return;
+        if (res2.statusCode >= 200 && res2.statusCode < 300 && body2?['success'] == true) {
+          final data2 = body2?['data'];
+          final slotList2 = data2 is Map && data2['slots'] is List
+              ? (data2['slots'] as List)
+              : (data2 is List ? data2 : const []);
+          if (slotList2.isNotEmpty && slotList2.first is Map) {
+            final slot2 = Map<String, dynamic>.from(slotList2.first as Map);
+            setState(() {
+              _applyTopResultsFromSlotMap(slot2);
+            });
+          }
+        }
+      }
     } catch (_) {}
   }
 
@@ -301,6 +381,12 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
   }
 
   String _formatTimer(int s) => '${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}';
+
+  String _formatTimeNoSeconds(DateTime t) {
+    final h = t.hour % 12 == 0 ? 12 : t.hour % 12;
+    final ampm = t.hour >= 12 ? 'PM' : 'AM';
+    return '$h:${t.minute.toString().padLeft(2, '0')} $ampm';
+  }
 
   String _formatClock(DateTime t) {
     final h = t.hour % 12 == 0 ? 12 : t.hour % 12;
@@ -313,6 +399,54 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
     final m = d.minute;
     final next = (m ~/ 15) * 15 + 15;
     return DateTime(now.year, now.month, now.day, now.hour, next % 60).add(Duration(hours: next >= 60 ? 1 : 0));
+  }
+
+  DateTime _nextDrawAt() {
+    final nextIso = (_serverSlot?['nextSlotStartIso'] ?? '').toString().trim();
+    final nextDt = DateTime.tryParse(nextIso);
+    if (nextDt != null) return nextDt.toLocal();
+    return _nextDraw(_now);
+  }
+
+  List<Map<String, String>> _buildAdvanceSlots() {
+    final base = _nextDrawAt();
+    final sameDate = DateTime(base.year, base.month, base.day);
+    final endOfDate = sameDate.add(const Duration(days: 1));
+    final out = <Map<String, String>>[];
+    var i = 0;
+    while (true) {
+      final dt = base.add(Duration(minutes: i * 15));
+      if (!dt.isBefore(endOfDate)) break;
+      final hh = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+      final mm = dt.minute.toString().padLeft(2, '0');
+      final ampm = dt.hour >= 12 ? 'PM' : 'AM';
+      out.add({'slotStartIso': dt.toUtc().toIso8601String(), 'label': '$hh:$mm $ampm'});
+      i += 1;
+    }
+    return out;
+  }
+
+  Future<void> _openAdvancePage() async {
+    final slots = _buildAdvanceSlots();
+    if (slots.isEmpty) {
+      _addToast('No upcoming slots available.');
+      return;
+    }
+    final selected = await Navigator.of(context).push<List<String>>(
+      MaterialPageRoute(
+        builder: (_) => Lottery3DAdvancePage(
+          currentLabel: _formatTimeNoSeconds(_now),
+          nextLabel: _formatTimeNoSeconds(_nextDrawAt()),
+          slotOptions: slots,
+          selectedSlots: _selectedAdvanceSlots,
+        ),
+      ),
+    );
+    if (!mounted || selected == null) return;
+    setState(() => _selectedAdvanceSlots = selected);
+    _addToast(
+      selected.isEmpty ? 'Advance draw cleared' : 'Advance slots selected: ${selected.length}',
+    );
   }
 
   String _timeToDrawText() {
@@ -347,38 +481,11 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
     });
   }
 
-  ({int from, int to})? _resolveRangeBounds(String from, String to) {
-    final fromDigits = from.replaceAll(RegExp(r'\D'), '');
-    final toDigits = to.replaceAll(RegExp(r'\D'), '');
-    final f = int.tryParse(fromDigits);
-    final t = int.tryParse(toDigits);
-    if (f == null || t == null || f < 0 || f > 999) return null;
-    final fromInt = f;
-    var toInt = t;
-
-    // If RANGE has 1-2 digits but TO is 3-digit+, start from 100.
-    if (fromInt < 100 && toInt > 99) {
-      return (from: 100, to: toInt);
-    }
-
-    // Convenience input: when FROM is 100+ and TO is 1-2 digits, treat TO as same-hundreds suffix.
-    // Example: FROM=100, TO=5 => range 100..105 (instead of invalid 100..005).
-    if (fromInt > 99 && toDigits.length < 3) {
-      final baseHundreds = (fromInt ~/ 100) * 100;
-      toInt = baseHundreds + toInt;
-      while (toInt < fromInt && toInt + 100 <= 999) {
-        toInt += 100;
-      }
-    }
-
-    if (toInt > 999 || fromInt > toInt || (toInt - fromInt + 1) > 1000) return null;
-    return (from: fromInt, to: toInt);
-  }
-
   List<String> _rangeNumbers(String from, String to) {
-    final bounds = _resolveRangeBounds(from, to);
-    if (bounds == null) return [];
-    return [for (int i = bounds.from; i <= bounds.to; i++) i.toString().padLeft(3, '0')];
+    final f = int.tryParse(from);
+    final t = int.tryParse(to);
+    if (f == null || t == null || f > t || f < 0 || t > 999 || (t - f + 1) > 1000) return [];
+    return [for (int i = f; i <= t; i++) i.toString().padLeft(3, '0')];
   }
 
   List<String> _luckyNumbers(int qty, String mode) {
@@ -420,13 +527,13 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
     setState(() {
       _bets.addAll(created);
       _inputNumber = '';
-      _points = '$_selectedRate';
+      _points = '0';
       _rangeFrom = '';
       _rangeTo = '';
       _qty = '';
       _validationMsg = '';
     });
-    _addToast('Bet Added Successfully');
+    _addToast('Bet added');
   }
 
   void _addBet() {
@@ -441,17 +548,6 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
       return;
     }
     if ((_rangeFrom.isNotEmpty && _rangeTo.isEmpty) || (_rangeFrom.isEmpty && _rangeTo.isNotEmpty)) {
-      if (_rangeFrom.isNotEmpty && _rangeTo.isEmpty) {
-        // Shortcut: RANGE=5 + ADD => 100..105
-        final short = int.tryParse(_rangeFrom.replaceAll(RegExp(r'\D'), ''));
-        if (short != null && short >= 0 && short <= 99) {
-          final nums = _rangeNumbers('100', '${100 + short}');
-          if (nums.isNotEmpty) {
-            _appendBets(nums, modes, pts);
-            return;
-          }
-        }
-      }
       setState(() => _validationMsg = 'Please enter complete range (FROM and TO).');
       return;
     }
@@ -488,28 +584,33 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
   }
 
   void _digitInput(String d) {
-    bool shouldAutoAdd = false;
+    var autoAdd = false;
     setState(() {
-      String append(String v, int max) => '$v$d'.replaceAll(RegExp(r'\D'), '').substring(0, math.min(max, ('$v$d'.replaceAll(RegExp(r'\D'), '')).length));
+      String append(String v, int max) {
+        final next = '$v$d'.replaceAll(RegExp(r'\D'), '');
+        return next.substring(0, math.min(max, next.length));
+      }
       switch (_activeTarget) {
         case _InputTarget.points:
           _points = append(_points == '0' ? '' : _points, 4);
           if (_points.isEmpty) _points = '0';
           break;
         case _InputTarget.number:
+          final before = _inputNumber.length;
           _inputNumber = append(_inputNumber, 3);
-          final parsed = int.tryParse(_inputNumber) ?? -1;
-          shouldAutoAdd = parsed > 99 && _rangeFrom.isEmpty && _rangeTo.isEmpty && _qty.isEmpty;
+          if (before < 3 && _inputNumber.length == 3) autoAdd = true;
           break;
         case _InputTarget.rangeFrom:
+          final before = _rangeFrom.length;
           _rangeFrom = append(_rangeFrom, 3);
+          if (before < 3 && _rangeFrom.length == 3 && _rangeTo.length < 3) {
+            _activeTarget = _InputTarget.rangeTo;
+          }
           break;
         case _InputTarget.rangeTo:
+          final before = _rangeTo.length;
           _rangeTo = append(_rangeTo, 3);
-          final fromRaw = int.tryParse(_rangeFrom.replaceAll(RegExp(r'\D'), '')) ?? -1;
-          final toRaw = int.tryParse(_rangeTo.replaceAll(RegExp(r'\D'), '')) ?? -1;
-          final bounds = _resolveRangeBounds(_rangeFrom, _rangeTo);
-          shouldAutoAdd = bounds != null && fromRaw > 99 && toRaw > fromRaw && _qty.isEmpty;
+          if (before < 3 && _rangeTo.length == 3 && _rangeFrom.length == 3) autoAdd = true;
           break;
         case _InputTarget.qty:
           _qty = append(_qty, 3);
@@ -517,8 +618,11 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
       }
       _validationMsg = '';
     });
-    if (shouldAutoAdd) {
-      _addBet();
+    if (autoAdd) {
+      Future<void>.delayed(const Duration(milliseconds: 10), () {
+        if (!mounted) return;
+        _addBet();
+      });
     }
   }
 
@@ -603,74 +707,20 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
     return phase == 'hint';
   }
 
-  DateTime get _nextDrawAt {
-    if (_serverSlot != null) {
-      final nextIso = (_serverSlot?['nextSlotStartIso'] ?? '').toString().trim();
-      final nextDt = DateTime.tryParse(nextIso);
-      if (nextDt != null) return nextDt.toLocal();
-      final startIso = (_serverSlot?['slotStartIso'] ?? '').toString().trim();
-      final startDt = DateTime.tryParse(startIso);
-      if (startDt != null) return startDt.toLocal().add(const Duration(minutes: 15));
-    }
-    return DateTime.now().add(const Duration(minutes: 15));
-  }
-
-  String _formatAdvanceSlotLabel(DateTime dateTime) {
-    final local = dateTime.toLocal();
-    final h = local.hour % 12 == 0 ? 12 : local.hour % 12;
-    final m = local.minute.toString().padLeft(2, '0');
-    final ampm = local.hour >= 12 ? 'PM' : 'AM';
-    return '$h:$m $ampm';
-  }
-
-  List<Map<String, String>> get _advanceDrawSlots {
-    final base = _nextDrawAt;
-    final sameDate = DateTime(base.year, base.month, base.day);
-    final endOfDate = sameDate.add(const Duration(days: 1));
-    final slots = <Map<String, String>>[];
-    var i = 0;
-    while (true) {
-      final dt = base.add(Duration(minutes: i * 15));
-      if (!dt.isBefore(endOfDate)) break;
-      slots.add({
-        'slotStartIso': dt.toUtc().toIso8601String(),
-        'label': _formatAdvanceSlotLabel(dt),
-      });
-      i += 1;
-    }
-    return slots;
-  }
-
-  Future<void> _openAdvancePage() async {
-    final selected = await Navigator.of(context).push<List<String>>(
-      MaterialPageRoute(
-        builder: (_) => Lottery3DAdvancePage(
-          currentLabel: _formatClock(_now),
-          nextLabel: _timeToDrawText(),
-          slotOptions: _advanceDrawSlots,
-          selectedSlots: _selectedAdvanceSlots,
-        ),
-      ),
-    );
-    if (!mounted || selected == null) return;
-    setState(() {
-      _selectedAdvanceSlots = selected;
-      _validationMsg = selected.isNotEmpty
-          ? 'Advance slot selected (${selected.length})'
-          : 'No advance slot selected';
-    });
-  }
-
   Future<void> _buy() async {
+    final proceed = await _showBetPreviewDialog3d();
+    if (proceed != true) return;
+    await _executeBuy();
+  }
+
+  Future<void> _executeBuy() async {
     if (_buying) return;
     if (_bets.isEmpty) {
       setState(() => _validationMsg = 'Add at least one bet before BUY.');
       return;
     }
     final total = _bets.fold<int>(0, (sum, e) => sum + e.points);
-    final slotCount = _selectedAdvanceSlots.isNotEmpty ? _selectedAdvanceSlots.length : 1;
-    final requiredBalance = total * slotCount;
-    if (_walletBalance < requiredBalance) {
+    if (_walletBalance < total) {
       setState(() => _validationMsg = 'Insufficient balance');
       return;
     }
@@ -698,14 +748,17 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
     setState(() => _buying = true);
     try {
       final headers = await _authHeaders();
-      final targetSlots =
-          _selectedAdvanceSlots.isNotEmpty ? List<String>.from(_selectedAdvanceSlots) : <String>[_nextDrawAt.toUtc().toIso8601String()];
+      final targetSlots = _selectedAdvanceSlots.isNotEmpty ? List<String>.from(_selectedAdvanceSlots) : <String>[];
       num? parsedBalance;
-      for (final slotStartIso in targetSlots) {
+      for (final slotStartIso in (targetSlots.isEmpty ? <String?>[null] : targetSlots)) {
+        final payload = <String, dynamic>{'rounds': rounds, 'mode': '3d'};
+        if (slotStartIso != null && slotStartIso.isNotEmpty) {
+          payload['slotStartIso'] = slotStartIso;
+        }
         final res = await http.post(
           Uri.parse('$kApiBaseUrl/quiz/bet-batch'),
           headers: {'Content-Type': 'application/json', ...headers},
-          body: jsonEncode({'rounds': rounds, 'mode': '3d', 'slotStartIso': slotStartIso}),
+          body: jsonEncode(payload),
         );
         final body = jsonDecode(res.body) as Map<String, dynamic>?;
         if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -717,9 +770,9 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
         if (b != null) parsedBalance = b;
       }
       if (parsedBalance != null) {
-        final nextBalance = parsedBalance;
-        await AuthService.instance.updateStoredBalance(nextBalance);
-        if (mounted) setState(() => _walletBalance = nextBalance);
+        final balance = parsedBalance;
+        await AuthService.instance.updateStoredBalance(balance);
+        if (mounted) setState(() => _walletBalance = balance);
       } else {
         await _loadWalletBalance();
       }
@@ -734,31 +787,10 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
         );
         _bets.clear();
         _selectedAdvanceSlots = const [];
-        _validationMsg = slotCount > 1
-            ? 'Status: pending. Scheduled for $slotCount future slots.'
-            : 'Status: pending. Result will be shown after draw time.';
+        _validationMsg = '';
       });
-      _addToast(slotCount > 1 ? 'Advance draw bets scheduled successfully' : 'Bet placed successfully');
-      if (mounted) {
-        final message = slotCount > 1
-            ? 'Bet placed successfully for $slotCount slots.'
-            : 'Bet placed successfully.';
-        unawaited(
-          showDialog<void>(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              title: const Text('Bet Success'),
-              content: Text(message),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(ctx).pop(),
-                  child: const Text('OK'),
-                ),
-              ],
-            ),
-          ),
-        );
-      }
+      if (!mounted) return;
+      await _showSuccessDialog3d(gameId, total);
     } catch (_) {
       setState(() => _validationMsg = 'BUY failed');
     } finally {
@@ -766,13 +798,15 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
     }
   }
 
-  void _cancelLatestPending() {
+  Future<void> _cancelLatestPending() async {
     final idx = _tickets.indexWhere((t) => t.status == 'pending');
     if (idx < 0) {
       _addToast('No active ticket to cancel before draw time.');
       return;
     }
     final t = _tickets[idx];
+    final confirmed = await _showCancelBetDialog(t);
+    if (confirmed != true) return;
     setState(() {
       _tickets[idx] = _TicketEntry(
         id: t.id,
@@ -789,57 +823,226 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
 
   void _headerAction(String label) {
     if (label == 'Refresh') {
-      setState(() {
-        _selectedModes
-          ..clear()
-          ..add('box');
-        _selectedPanels
-          ..clear()
-          ..add('A');
-        _selectedDigits.clear();
-        _selectedRate = 10;
-        _inputNumber = '';
-        _points = '10';
-        _rangeFrom = '';
-        _rangeTo = '';
-        _qty = '';
-        _lPickType = 'box';
-        _activeTarget = _InputTarget.number;
-        _validationMsg = '';
-        _toast = '';
-        _bets.clear();
-      });
       unawaited(_syncQuizSlot());
       unawaited(_syncLastSlotResult());
       unawaited(_loadWalletBalance());
-      _addToast('Refreshed and cleared');
-      return;
-    }
-    if (label == 'Result') {
-      Navigator.of(context).pushNamed('/lottery/3d/result');
-      return;
-    }
-    if (label == 'Account') {
-      Navigator.of(context).pushNamed('/lottery/3d/account');
+      _addToast('Refreshed');
       return;
     }
     if (label == 'Quiz') {
-      Navigator.of(context).pushNamed('/lottery/3d/quiz');
-      return;
-    }
-    if (label == 'Ticket List') {
-      Navigator.of(context).pushNamed('/lottery/3d/ticket-list');
-      return;
-    }
-    if (label == 'History') {
-      Navigator.of(context).pushNamed('/lottery/3d/history');
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const Lottery3DQuizPage()),
+      );
       return;
     }
     if (label == 'Cancel Bet') {
-      _cancelLatestPending();
+      unawaited(_cancelLatestPending());
       return;
     }
-    _addToast('$label opened');
+    if (label == 'Result') {
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const Lottery3DResultPage()),
+      );
+      return;
+    }
+    if (label == 'Account') {
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const Lottery3DAccountPage()),
+      );
+      return;
+    }
+    if (label == 'History') {
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const Lottery3DHistoryPage()),
+      );
+      return;
+    }
+    if (label == 'Ticket List') {
+      if (_bets.isNotEmpty) {
+        unawaited(_showCurrentBetsTicketDialog());
+      } else {
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const Lottery3DTicketListPage()),
+        );
+      }
+      return;
+    }
+    _addToast(label);
+  }
+
+  Future<void> _showCurrentBetsTicketDialog() async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        final total = _bets.fold<int>(0, (sum, e) => sum + e.points);
+        return AlertDialog(
+          title: const Text('Current Bets'),
+          content: SizedBox(
+            width: 420,
+            height: 300,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Total Bets: ${_bets.length}'),
+                Text('Total Points: $total'),
+                const SizedBox(height: 8),
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: _bets.length,
+                    itemBuilder: (context, i) {
+                      final b = _bets[i];
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 2),
+                        child: Text('${b.panel}-${b.number} [${b.mode.toUpperCase()}] x ${b.points}'),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<bool?> _showBetPreviewDialog3d() {
+    final total = _bets.fold<int>(0, (sum, e) => sum + e.points);
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return Dialog(
+          backgroundColor: const Color(0xFF171717),
+          insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 540),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('You want to place bet?', style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 8),
+                  Text('Total Bets: ${_bets.length}    Amount: $total', style: const TextStyle(color: Color(0xFFD4D4D4), fontSize: 12)),
+                  const SizedBox(height: 10),
+                  Flexible(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0F0F0F),
+                        border: Border.all(color: const Color(0xFF3F3F46)),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: _bets.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1, color: Color(0xFF27272A)),
+                        itemBuilder: (context, i) {
+                          final b = _bets[i];
+                          return ListTile(
+                            dense: true,
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
+                            title: Text('${b.number} (${b.panel})', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
+                            subtitle: Text('${b.mode.toUpperCase()}  x  ${b.points}', style: const TextStyle(color: Color(0xFFA1A1AA), fontSize: 11)),
+                            trailing: IconButton(
+                              icon: const Icon(Icons.close, size: 16, color: Color(0xFFF87171)),
+                              onPressed: () => setState(() => _bets.removeAt(i)),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.of(context).pop(false),
+                          style: OutlinedButton.styleFrom(
+                            side: const BorderSide(color: Color(0xFF52525B)),
+                            foregroundColor: const Color(0xFFE5E7EB),
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                          ),
+                          child: const Text('Cancel', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: () => Navigator.of(context).pop(true),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF2563EB),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                          ),
+                          child: const Text('Buy Tickets', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showSuccessDialog3d(String gameId, int total) async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF171717),
+          title: const Text('Bets Placed Successfully', style: TextStyle(color: Colors.white, fontSize: 14)),
+          content: Text('Ticket: $gameId\nAmount: $total', style: const TextStyle(color: Color(0xFFD4D4D8), fontSize: 12)),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('OK', style: TextStyle(color: Color(0xFF60A5FA))),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<bool?> _showCancelBetDialog(_TicketEntry t) {
+    return showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF171717),
+          title: const Text('Cancel Ticket Bet', style: TextStyle(color: Colors.white, fontSize: 14)),
+          content: Text(
+            'Ticket ID: ${t.gameId}\nDraw Time: ${_timeToDrawText()}\nAmount: ${t.totalPoints}\nRefund: ${t.totalPoints}',
+            style: const TextStyle(color: Color(0xFFD4D4D8), fontSize: 12),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('No', style: TextStyle(color: Color(0xFFA1A1AA))),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFDC2626), foregroundColor: Colors.white),
+              child: const Text('Yes, Cancel'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   @override
@@ -874,54 +1077,65 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
       child: DefaultTextStyle(
         style: const TextStyle(fontSize: 10),
         child: Container(
-          color: Colors.white,
+          color: const Color(0xFF0B1223),
           child: SafeArea(
             child: Padding(
               padding: const EdgeInsets.all(2),
               child: _booting
                   ? const _ThreeDLoadingView()
-                  : Column(
-                children: [
-                  if (_toast.isNotEmpty)
-                    Container(
-                      width: double.infinity,
-                      margin: const EdgeInsets.only(bottom: 4),
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                  : Container(
                       decoration: BoxDecoration(
-                        color: const Color(0xFF16A34A),
+                        color: const Color(0xFFF3F4F6),
+                        border: Border.all(color: const Color(0xFFCBD5E1)),
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      child: Text(
-                        _toast,
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                      padding: const EdgeInsets.all(2),
+                      child: Column(
+                        children: [
+                          if (_toast.isNotEmpty)
+                            Container(
+                              width: double.infinity,
+                              margin: const EdgeInsets.only(bottom: 4),
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF16A34A),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                _toast,
+                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                              ),
+                            ),
+                          _buildTopRow(resultFresh),
+                          const SizedBox(height: 2),
+                          _sectionFrame(child: _buildStatRow(timer, lastTicket)),
+                          const SizedBox(height: 2),
+                          _sectionFrame(child: _buildMenuRow()),
+                          const SizedBox(height: 2),
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(3),
+                            child: LinearProgressIndicator(
+                              minHeight: _timerSeconds <= 300 ? 6 : 4,
+                              value: _timerSeconds / _intervalSeconds,
+                              color: _timerSeconds <= 300 ? const Color(0xFFD4372F) : const Color(0xFF2E59C6),
+                              backgroundColor: _timerSeconds <= 300 ? const Color(0xFFFECDD3) : const Color(0xFFE8E8E8),
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          _sectionFrame(child: _buildPanelDigitRow()),
+                          const SizedBox(height: 2),
+                          Expanded(
+                            child: Row(
+                              children: [
+                                Expanded(child: _buildLeftSection(totalPoints)),
+                                const SizedBox(width: 4),
+                                SizedBox(width: 184, child: _buildRightSection()),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  _buildTopRow(resultFresh),
-                  const SizedBox(height: 1),
-                  _buildStatRow(timer, lastTicket),
-                  const SizedBox(height: 1),
-                  _buildMenuRow(),
-                  const SizedBox(height: 1),
-                  LinearProgressIndicator(
-                    minHeight: _timerSeconds <= 300 ? 6 : 4,
-                    value: _timerSeconds / _intervalSeconds,
-                    color: _timerSeconds <= 300 ? const Color(0xFFD4372F) : const Color(0xFF2E59C6),
-                    backgroundColor: _timerSeconds <= 300 ? const Color(0xFFFECDD3) : const Color(0xFFE8E8E8),
-                  ),
-                  const SizedBox(height: 1),
-                  _buildPanelDigitRow(),
-                  const SizedBox(height: 1),
-                  Expanded(
-                    child: Row(
-                      children: [
-                        Expanded(child: _buildLeftSection(totalPoints)),
-                        const SizedBox(width: 4),
-                        SizedBox(width: 220, child: _buildRightSection()),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
             ),
           ),
         ),
@@ -931,7 +1145,6 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
 
   Widget _buildTopRow(bool resultFresh) {
     Widget panel(String title, String value, Color base) {
-      final setLabel = 'SET $title';
       return Expanded(
         child: Container(
           decoration: BoxDecoration(
@@ -941,17 +1154,17 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
           child: Column(
             children: [
               Container(
-                height: 20,
+                height: 16,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   color: base,
                   borderRadius: const BorderRadius.vertical(top: Radius.circular(6)),
                 ),
-                child: Text(setLabel, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w800)),
+                child: Text(title, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w900)),
               ),
               Expanded(
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
+                  padding: const EdgeInsets.all(2),
                   color: base.withValues(alpha: 0.92),
                   child: Row(
                     children: value.padLeft(3, '-').substring(0, 3).split('').map((d) {
@@ -960,7 +1173,7 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
                           margin: const EdgeInsets.symmetric(horizontal: 1),
                           alignment: Alignment.center,
                           decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(4)),
-                          child: Text(d, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w800)),
+                          child: Text(d, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w900)),
                         ),
                       );
                     }).toList(),
@@ -974,11 +1187,11 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
     }
 
     return SizedBox(
-      height: 54,
+      height: 42,
       child: Row(
         children: [
           Container(
-            width: 132,
+            width: 150,
             decoration: BoxDecoration(
               color: const Color(0xFFFFFBEB),
               border: Border.all(color: const Color(0xFFE5C177)),
@@ -994,26 +1207,19 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
             ),
           ),
           const SizedBox(width: 4),
-          panel('A', _topResults['A'] ?? '---', const Color(0xFF2563EB)),
+          panel('SET A', _topResults['A'] ?? '---', const Color(0xFF2563EB)),
           const SizedBox(width: 4),
-          panel('B', _topResults['B'] ?? '---', const Color(0xFFDC2626)),
+          panel('SET B', _topResults['B'] ?? '---', const Color(0xFFDC2626)),
           const SizedBox(width: 4),
-          panel('C', _topResults['C'] ?? '---', const Color(0xFF059669)),
+          panel('SET C', _topResults['C'] ?? '---', const Color(0xFF059669)),
           const SizedBox(width: 4),
           SizedBox(
             width: 70,
-            height: double.infinity,
             child: ElevatedButton.icon(
               onPressed: _exit3D,
               icon: const Icon(Icons.home, size: 10),
               label: const Text('Home'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF78350F),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF78350F), foregroundColor: Colors.white),
             ),
           ),
         ],
@@ -1025,12 +1231,12 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
     Widget stat(String t, String v) {
       return Expanded(
         child: Container(
-          height: 34,
+          height: 32,
           decoration: BoxDecoration(color: const Color(0xFFF8FAFC), border: Border.all(color: const Color(0xFF8B9AB3)), borderRadius: BorderRadius.circular(6)),
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
           child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(t, style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: Color(0xFF475569))),
-            const SizedBox(height: 3),
+            const SizedBox(height: 1),
             Text(v, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Color(0xFF1F2937))),
           ]),
         ),
@@ -1049,119 +1255,198 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
         const SizedBox(width: 4),
         stat('Last Ticket', (lastTicket?.status ?? '-').toUpperCase()),
         const SizedBox(width: 4),
-        stat('Last Trn', _lastTxnId),
-        const SizedBox(width: 4),
         stat('Last Win', _lastWinAmount.toString()),
+        const SizedBox(width: 4),
+        SizedBox(
+          width: 130,
+          height: 32,
+          child: ElevatedButton(
+            onPressed: _goBackTo2DGame,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF0F172A),
+              foregroundColor: Colors.white,
+              minimumSize: const Size(0, 32),
+              maximumSize: const Size(double.infinity, 32),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(6),
+              ),
+            ),
+            child: const Text(
+              'Go back to 2D game',
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800),
+            ),
+          ),
+        ),
       ],
     );
   }
 
   Widget _buildMenuRow() {
     const labels = ['Result', 'Account', 'Quiz', 'Ticket List', 'Cancel Bet', 'Refresh', 'History'];
-    return Row(
+    return SizedBox(
+      height: 28,
+      child: Row(
       children: labels.map((label) {
         return Expanded(
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 1),
-            child: SizedBox(
-              height: 28,
-              child: ElevatedButton(
-                onPressed: () => _headerAction(label),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFF7ECDE),
-                  foregroundColor: const Color(0xFF6B4423),
-                  side: const BorderSide(color: Colors.black),
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                ),
+            padding: const EdgeInsets.symmetric(horizontal: 1, vertical: 0),
+            child: ElevatedButton(
+              onPressed: () => _headerAction(label),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFF3EDE3),
+                foregroundColor: const Color(0xFF5B3B1F),
+                side: const BorderSide(color: Color(0xFF6B7280)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                minimumSize: const Size(0, 26),
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: Center(
                 child: Text(
                   label,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800),
+                  style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w800),
                 ),
               ),
             ),
           ),
         );
       }).toList(),
+      ),
+    );
+  }
+
+  Widget _sectionFrame({required Widget child}) {
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        border: Border.all(color: const Color(0xFFCBD5E1)),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      padding: const EdgeInsets.all(1),
+      child: child,
     );
   }
 
   Widget _buildPanelDigitRow() {
-    return Row(
-      children: [
-        Wrap(
-          spacing: 3,
-          children: [
-            FilterChip(
-              selected: _selectedPanels.length == 3,
-              onSelected: (_) => setState(() => _selectedPanels.length == 3 ? _selectedPanels.clear() : _selectedPanels.addAll(panelOptions)),
-              label: const Text('All', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Colors.white)),
-              visualDensity: const VisualDensity(horizontal: -3, vertical: -3),
-              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              labelPadding: const EdgeInsets.symmetric(horizontal: 3),
-              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 0),
-            ),
-            for (final p in panelOptions)
-              FilterChip(
-                selected: _selectedPanels.contains(p),
-                onSelected: (_) => setState(() => _selectedPanels.contains(p) ? _selectedPanels.remove(p) : _selectedPanels.add(p)),
-                label: Text(p, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Colors.white)),
-                visualDensity: const VisualDensity(horizontal: -3, vertical: -3),
-                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                labelPadding: const EdgeInsets.symmetric(horizontal: 3),
-                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 0),
+    return SizedBox(
+      height: 34,
+      child: Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFFF3F4F6),
+        border: Border.all(color: const Color(0xFFD1D5DB)),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 1),
+      child: Row(
+        children: [
+          Row(
+            children: [
+              _selectorButton(
+                label: 'All',
+                selected: _selectedPanels.length == 3,
+                onTap: () => setState(() => _selectedPanels.length == 3 ? _selectedPanels.clear() : _selectedPanels.addAll(panelOptions)),
+                minWidth: 30,
+                fontSize: 11,
+                selectedColor: const Color(0xFF2563EB),
+                withCheck: true,
               ),
-          ],
-        ),
-        const VerticalDivider(width: 8),
-        Expanded(
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                ChoiceChip(
-                  selected: _selectedDigits.length == 10,
-                  onSelected: (_) => setState(() => _selectedDigits.length == 10 ? _selectedDigits.clear() : _selectedDigits.addAll(digitOptions)),
-                  label: const Text('All', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Colors.white)),
-                  visualDensity: const VisualDensity(horizontal: -3, vertical: -3),
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  labelPadding: const EdgeInsets.symmetric(horizontal: 3),
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 0),
+              const SizedBox(width: 2),
+              for (final p in panelOptions) ...[
+                _selectorButton(
+                  label: p,
+                  selected: _selectedPanels.contains(p),
+                  onTap: () => setState(() => _selectedPanels.contains(p) ? _selectedPanels.remove(p) : _selectedPanels.add(p)),
+                  selectedColor: const Color(0xFF065F46),
+                  minWidth: 26,
+                  fontSize: 11,
+                  withCheck: true,
                 ),
-                const SizedBox(width: 3),
-                for (final d in digitOptions)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 2),
-                    child: ChoiceChip(
-                      selected: _selectedDigits.contains(d),
-                      onSelected: (_) => setState(() => _selectedDigits.contains(d) ? _selectedDigits.remove(d) : _selectedDigits.add(d)),
-                      label: Text(d, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Colors.white)),
-                      visualDensity: const VisualDensity(horizontal: -3, vertical: -3),
-                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      labelPadding: const EdgeInsets.symmetric(horizontal: 2),
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 0),
-                    ),
-                  ),
+                const SizedBox(width: 2),
               ],
+            ],
+          ),
+          const VerticalDivider(width: 8, color: Color(0xFFCBD5E1)),
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  _selectorButton(
+                    label: 'All',
+                    selected: _selectedDigits.length == 10,
+                    onTap: () => setState(() => _selectedDigits.length == 10 ? _selectedDigits.clear() : _selectedDigits.addAll(digitOptions)),
+                    minWidth: 30,
+                    fontSize: 11,
+                    selectedColor: const Color(0xFF4F46E5),
+                    withCheck: true,
+                  ),
+                  const SizedBox(width: 2),
+                  for (final d in digitOptions)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 2),
+                      child: _selectorButton(
+                        label: d,
+                        selected: _selectedDigits.contains(d),
+                        onTap: () => setState(() => _selectedDigits.contains(d) ? _selectedDigits.remove(d) : _selectedDigits.add(d)),
+                        minWidth: 24,
+                        fontSize: 11,
+                        selectedColor: const Color(0xFF4F46E5),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
-        ),
-        const SizedBox(width: 4),
-        ElevatedButton(
-          onPressed: _goBackTo2DInLandscape,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFF0F172A),
-            foregroundColor: Colors.white,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(4),
+          const SizedBox(width: 2),
+          SizedBox(
+            width: 60,
+            height: 24,
+            child: ElevatedButton(
+              onPressed: () {
+                final pool = _selectedDigits.isEmpty ? digitOptions : _selectedDigits.toList();
+                final r = math.Random();
+                final nums = <String>[];
+                for (int i = 0; i < 5; i++) {
+                  nums.add('${pool[r.nextInt(pool.length)]}${pool[r.nextInt(pool.length)]}${pool[r.nextInt(pool.length)]}');
+                }
+                _appendBets(nums, _normalizedModes().isEmpty ? ['box'] : _normalizedModes(), int.tryParse(_points) ?? _selectedRate);
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFDC2626),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 0),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+              ),
+              child: const Text('Motor', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800)),
             ),
           ),
-          child: const Text('Go back to 2D game'),
-        ),
-      ],
+          const SizedBox(width: 2),
+          SizedBox(
+            width: 68,
+            height: 24,
+            child: ElevatedButton(
+              onPressed: () {
+                final q = (int.tryParse(_qty) ?? 10).clamp(1, 50);
+                final nums = _luckyNumbers(q, _lPickType);
+                _appendBets(nums, [_lPickType], int.tryParse(_points) ?? _selectedRate);
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFFBBF24),
+                foregroundColor: const Color(0xFF78350F),
+                padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 0),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+              ),
+              child: const Text('Lucky Pick', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800)),
+            ),
+          ),
+        ],
+      ),
+      ),
     );
   }
 
@@ -1169,64 +1454,70 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
     return Column(
       children: [
         Container(
-          decoration: BoxDecoration(border: Border.all(color: const Color(0xFFD9D9D9)), borderRadius: BorderRadius.circular(8), color: Colors.white),
+          decoration: BoxDecoration(
+            border: Border.all(color: const Color(0xFFD9D9D9)),
+            borderRadius: BorderRadius.circular(8),
+            color: const Color(0xFFFFFBEB),
+          ),
           padding: const EdgeInsets.all(2),
-          child: Row(
-            children: [
-              for (int i = 0; i < modeOptions.length; i++) ...[
-                if (i != 0) const SizedBox(width: 3),
-                Expanded(
-                  child: FilterChip(
-                    selected: _selectedModes.contains(modeOptions[i]),
-                    onSelected: (_) {
-                      final m = modeOptions[i];
-                      setState(() {
-                        if (m == 'all') {
-                          if (_selectedModes.contains('all')) {
-                            _selectedModes.clear();
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.start,
+                children: [
+                  for (final m in modeOptions) ...[
+                    _selectorButton(
+                      label: m.toUpperCase(),
+                      selected: _selectedModes.contains(m),
+                      selectedColor: const Color(0xFF065F46),
+                      withCheck: true,
+                      minWidth: 44,
+                      onTap: () {
+                        setState(() {
+                          if (m == 'all') {
+                            if (_selectedModes.contains('all')) {
+                              _selectedModes.clear();
+                            } else {
+                              _selectedModes
+                                ..clear()
+                                ..add('all')
+                                ..addAll(quickModes);
+                            }
+                          } else if (_selectedModes.contains(m)) {
+                            _selectedModes.remove(m);
+                            _selectedModes.remove('all');
                           } else {
-                            _selectedModes
-                              ..clear()
-                              ..add('all')
-                              ..addAll(quickModes);
+                            _selectedModes.add(m);
+                            if (quickModes.every(_selectedModes.contains)) _selectedModes.add('all');
                           }
-                        } else if (_selectedModes.contains(m)) {
-                          _selectedModes.remove(m);
-                          _selectedModes.remove('all');
-                        } else {
-                          _selectedModes.add(m);
-                          if (quickModes.every(_selectedModes.contains)) _selectedModes.add('all');
-                        }
-                      });
-                    },
-                    label: Center(
-                      child: FittedBox(
-                        fit: BoxFit.scaleDown,
-                        child: Text(
-                          modeOptions[i].toUpperCase(),
-                          maxLines: 1,
-                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Colors.white),
-                        ),
-                      ),
+                        });
+                      },
                     ),
-                    visualDensity: const VisualDensity(horizontal: -3, vertical: -3),
-                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    labelPadding: const EdgeInsets.symmetric(horizontal: 0),
-                    padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 0),
-                  ),
-                ),
-              ],
-            ],
+                    const SizedBox(width: 4),
+                  ],
+                ],
+              ),
+            ),
           ),
         ),
         const SizedBox(height: 2),
         Expanded(
-          child: Row(
-            children: [
-              Expanded(child: _buildBetList(totalPoints)),
-              const SizedBox(width: 4),
-              Expanded(child: _buildFormAndTotals()),
-            ],
+          child: Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFFE5E7EB),
+              border: Border.all(color: const Color(0xFFD1D5DB)),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            padding: const EdgeInsets.all(2),
+            child: Row(
+              children: [
+                Expanded(child: _buildBetList(totalPoints)),
+                const SizedBox(width: 4),
+                Expanded(child: _buildFormAndTotals(totalPoints)),
+              ],
+            ),
           ),
         ),
       ],
@@ -1235,161 +1526,246 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
 
   Widget _pillField(String label, String value, _InputTarget target) {
     final active = _activeTarget == target;
-    String display = value;
-    if (target == _InputTarget.number || target == _InputTarget.rangeFrom || target == _InputTarget.rangeTo) {
-      final digits = value.replaceAll(RegExp(r'\D'), '');
-      display = digits.isEmpty ? '' : digits.padLeft(3, '0');
-    }
     return InkWell(
       onTap: () => setState(() => _activeTarget = target),
       child: Container(
         height: 24,
-        width: label == 'ADD NUMBER'
-            ? 76
-            : (label == 'NUM' || label == 'RANGE' || label == 'TO')
-                ? 50
-                : 58,
+        width: label == 'ADD NUMBER' ? 118 : 58,
         alignment: Alignment.center,
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(22),
           border: Border.all(color: active ? const Color(0xFF2E59C6) : const Color(0xFFD1D5DB), width: active ? 2 : 1),
         ),
-        child: Text(display.isEmpty ? label : display, style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: display.isEmpty ? Colors.grey : Colors.black)),
+        child: Text(value.isEmpty ? label : value, style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: value.isEmpty ? Colors.grey : Colors.black)),
       ),
     );
   }
 
-  Widget _buildFormAndTotals() {
+  Widget _buildFormAndTotals(int totalPoints) {
     return Container(
       decoration: BoxDecoration(border: Border.all(color: const Color(0xFFD9D9D9)), borderRadius: BorderRadius.circular(8), color: Colors.white),
       padding: const EdgeInsets.all(2),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Section 1: Inputs (split into two horizontal rows)
-          Container(
-            width: double.infinity,
-            decoration: BoxDecoration(
-              border: Border.all(color: const Color(0xFFE2E8F0)),
-              borderRadius: BorderRadius.circular(6),
-              color: const Color(0xFFF8FAFC),
-            ),
-            padding: const EdgeInsets.all(4),
-            child: Column(
-              children: [
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      _pillField('ADD NUMBER', _inputNumber, _InputTarget.number),
-                      const SizedBox(width: 6),
-                      _pillField('RANGE', _rangeFrom, _InputTarget.rangeFrom),
-                      const SizedBox(width: 4),
-                      _pillField('TO', _rangeTo, _InputTarget.rangeTo),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 4),
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      Container(
-                        height: 24,
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(22),
-                          border: Border.all(color: const Color(0xFFD1D5DB)),
-                        ),
-                        child: DropdownButtonHideUnderline(
-                          child: DropdownButton<String>(
-                            value: _lPickType,
-                            style: const TextStyle(
-                              color: Colors.black,
-                              fontSize: 9,
-                              fontWeight: FontWeight.w700,
-                            ),
-                            dropdownColor: Colors.white,
-                            items: luckyPickModes.map((e) => DropdownMenuItem(value: e, child: Text(e.toUpperCase()))).toList(),
-                            onChanged: (v) {
-                              if (v == null) return;
-                              setState(() => _lPickType = v);
-                            },
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      _pillField('QTY', _qty, _InputTarget.qty),
-                      const SizedBox(width: 6),
-                      ElevatedButton(onPressed: _addBet, child: const Text('ADD')),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(children: [
+              _labeledInput('ADD NUMBER', _pillField('ADD NUMBER', _inputNumber, _InputTarget.number)),
+              const SizedBox(width: 4),
+              _labeledInput('RANGE', _pillField('NUM.', _rangeFrom, _InputTarget.rangeFrom)),
+              const SizedBox(width: 4),
+              _labeledInput('TO', _pillField('NUM.', _rangeTo, _InputTarget.rangeTo)),
+            ]),
           ),
-          const SizedBox(height: 4),
-          // Section 2: Rates
-          Container(
-            width: double.infinity,
-            decoration: BoxDecoration(
-              border: Border.all(color: const Color(0xFFE2E8F0)),
-              borderRadius: BorderRadius.circular(6),
-              color: const Color(0xFFF8FAFC),
-            ),
-            padding: const EdgeInsets.all(4),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Rates:',
-                  style: TextStyle(
-                    fontSize: 9,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.black,
+          const SizedBox(height: 2),
+          Row(
+            children: [
+              _labeledInput(
+                'L-PICK',
+                Container(
+                  height: 26,
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(22),
+                    border: Border.all(color: const Color(0xFFD1D5DB)),
+                  ),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      value: _lPickType,
+                      isDense: true,
+                      dropdownColor: Colors.white,
+                      style: const TextStyle(fontSize: 10, color: Colors.black, fontWeight: FontWeight.w700),
+                      items: luckyPickModes
+                          .map((e) => DropdownMenuItem(
+                                value: e,
+                                child: Text(
+                                  e.toUpperCase(),
+                                  style: const TextStyle(color: Colors.black),
+                                ),
+                              ))
+                          .toList(),
+                      onChanged: (v) {
+                        if (v == null) return;
+                        setState(() => _lPickType = v);
+                      },
+                    ),
                   ),
                 ),
-                const SizedBox(height: 3),
-                Wrap(
-                  spacing: 4,
-                  runSpacing: 4,
-                  children: rateOptions
-                      .map((r) => ChoiceChip(
-                            selected: _selectedRate == r,
-                            onSelected: (_) => setState(() {
-                              _selectedRate = r;
-                              _points = '$r';
-                              _activeTarget = _InputTarget.points;
-                            }),
-                            label: SizedBox(
-                              width: 22,
-                              child: Center(
-                                child: Text(
-                                  '$r',
-                                  style: const TextStyle(
-                                    fontSize: 8,
-                                    fontWeight: FontWeight.w800,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                              ),
-                            ),
-                            visualDensity: const VisualDensity(horizontal: -3, vertical: -3),
-                            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                            labelPadding: const EdgeInsets.symmetric(horizontal: 1),
-                            padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 0),
-                          ))
-                      .toList(),
+              ),
+              const SizedBox(width: 6),
+              _labeledInput('QTY', _pillField('Qty', _qty, _InputTarget.qty)),
+              const SizedBox(width: 4),
+              SizedBox(
+                height: 34,
+                child: ElevatedButton(
+                  onPressed: _addBet,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF111827),
+                    foregroundColor: const Color(0xFF10B981),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(18),
+                      side: const BorderSide(color: Color(0xFF334155)),
+                    ),
+                  ),
+                  child: const Text('ADD', style: TextStyle(fontWeight: FontWeight.w900)),
                 ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          const Text('Rates:', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800)),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                for (final r in rateOptions) ...[
+                  _rateChip(r),
+                  const SizedBox(width: 3),
+                ],
               ],
             ),
           ),
           const SizedBox(height: 2),
           if (_validationMsg.isNotEmpty)
             Text(_validationMsg, style: const TextStyle(color: Color(0xFFD4372F), fontWeight: FontWeight.w700)),
+          const SizedBox(height: 2),
         ],
+      ),
+    );
+  }
+
+  Widget _labeledInput(String label, Widget child) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w800, color: Color(0xFF374151))),
+        const SizedBox(height: 2),
+        child,
+      ],
+    );
+  }
+
+  Widget _rateChip(int rate) {
+    final selected = _selectedRate == rate;
+    return InkWell(
+      onTap: () => setState(() {
+        _selectedRate = rate;
+        _points = '$rate';
+        _activeTarget = _InputTarget.points;
+      }),
+      borderRadius: BorderRadius.circular(10),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 140),
+        curve: Curves.easeOut,
+        width: selected ? 56 : 42,
+        height: 24,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected ? const Color(0xFF065F46) : const Color(0xFF0F172A),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: selected ? const Color(0xFF047857) : const Color(0xFF1F2937)),
+        ),
+        child: Text(
+          '$rate',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: selected ? 10 : 9,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _selectorButton({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+    Color selectedColor = const Color(0xFF111827),
+    bool withCheck = false,
+    double minWidth = 48,
+    double fontSize = 9,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        constraints: BoxConstraints(minWidth: minWidth),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+        decoration: BoxDecoration(
+          color: selected ? selectedColor : const Color(0xFF0F172A),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFF1F2937)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (withCheck && selected) ...[
+              const Icon(Icons.check, size: 12, color: Colors.white),
+              const SizedBox(width: 4),
+            ],
+            Text(
+              label,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: fontSize,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showHintDialog() {
+    final hint = (_serverSlot?['hint'] ?? '').toString().trim();
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Hint'),
+        content: Text(hint.isEmpty ? 'No hint available for current quiz.' : hint),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('OK')),
+        ],
+      ),
+    );
+  }
+
+  Widget _keypadButton(String key, {Color? backgroundColor, Color? textColor}) {
+    return ElevatedButton(
+      onPressed: () {
+        if (key == 'X') {
+          _deleteOne();
+          return;
+        }
+        if (key == 'C') {
+          _clearActive();
+          return;
+        }
+        _digitInput(key);
+      },
+      style: ElevatedButton.styleFrom(
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(3),
+          side: BorderSide(color: (backgroundColor ?? const Color(0xFFF4F4F4)) == const Color(0xFFF04438) ? const Color(0xFFD63F35) : const Color(0xFF9CA3AF)),
+        ),
+        backgroundColor: backgroundColor ?? const Color(0xFFF4F4F4),
+        foregroundColor: textColor ?? Colors.black,
+        padding: EdgeInsets.zero,
+        minimumSize: const Size(double.infinity, 30),
+      ),
+      child: Text(
+        key,
+        style: TextStyle(
+          fontSize: key == 'C' || key == 'X' ? 10 : 11,
+          fontWeight: FontWeight.w800,
+        ),
       ),
     );
   }
@@ -1414,27 +1790,27 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
                     itemBuilder: (context, i) {
                       final b = _bets[i];
                       final head = b.panel == 'A' ? const Color(0xFF2563EB) : b.panel == 'B' ? const Color(0xFFDC2626) : const Color(0xFF059669);
-                      final numberDigits = b.number.replaceAll(RegExp(r'\D'), '');
-                      final visibleNumber = numberDigits.isEmpty ? '---' : numberDigits.padLeft(3, '0').substring(numberDigits.length > 3 ? numberDigits.length - 3 : 0);
                       return Container(
                         decoration: BoxDecoration(border: Border.all(color: const Color(0xFFE2E8F0)), borderRadius: BorderRadius.circular(10), color: const Color(0xFFF8FAFC)),
                         child: Column(
                           children: [
                             Container(height: 14, decoration: BoxDecoration(color: head, borderRadius: const BorderRadius.vertical(top: Radius.circular(9))), alignment: Alignment.center, child: Text(b.panel, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 8))),
                             const SizedBox(height: 2),
-                            Text(visibleNumber, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: Colors.black)),
-                            Text(b.mode.toUpperCase(), style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w700, color: Colors.black87)),
-                            Text('Price ${b.rate}', style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w600, color: Colors.black87)),
+                            Text(
+                              b.number,
+                              style: const TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.w900,
+                                color: Colors.black,
+                              ),
+                            ),
+                            Text(b.mode.toUpperCase(), style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w700, color: Color(0xFF64748B))),
+                            Text('Price ${b.rate}', style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w600, color: Color(0xFF64748B))),
                           ],
                         ),
                       );
                     },
                   ),
-          ),
-          const SizedBox(height: 2),
-          Align(
-            alignment: Alignment.centerRight,
-            child: Text('Total Count: ${_bets.length}', style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w800)),
           ),
           const SizedBox(height: 2),
           Row(
@@ -1445,14 +1821,11 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF10B981),
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
-                    minimumSize: const Size(0, 26),
+                    minimumSize: const Size(0, 32),
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(4),
-                    ),
                   ),
-                  child: const Text('BUY', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900)),
+                  child: const Text('BUY', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w900)),
                 ),
               ),
               const SizedBox(width: 4),
@@ -1462,14 +1835,11 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFFE11D48),
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
-                    minimumSize: const Size(0, 26),
+                    minimumSize: const Size(0, 32),
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(4),
-                    ),
                   ),
-                  child: const Text('Clear', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800)),
+                  child: const Text('Clear', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800)),
                 ),
               ),
               const SizedBox(width: 4),
@@ -1479,30 +1849,27 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF4F46E5),
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
-                    minimumSize: const Size(0, 26),
+                    minimumSize: const Size(0, 32),
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(4),
-                    ),
                   ),
-                  child: const Text('Advance', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800)),
+                  child: Text(
+                    _selectedAdvanceSlots.isEmpty ? 'Advance' : 'Advance (${_selectedAdvanceSlots.length})',
+                    style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w800),
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
               ),
               const SizedBox(width: 4),
               Container(
-                width: 40,
-                height: 22,
+                width: 50,
                 alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  border: Border.all(color: const Color(0xFFFCD34D), width: 1.5),
-                  borderRadius: BorderRadius.circular(4),
-                  color: const Color(0xFFFFFBEB),
-                ),
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                decoration: BoxDecoration(border: Border.all(color: const Color(0xFFFCD34D), width: 2), borderRadius: BorderRadius.circular(8), color: const Color(0xFFFFFBEB)),
                 child: Text(
                   '$totalPoints',
                   style: const TextStyle(
-                    fontSize: 12,
+                    fontSize: 9,
                     fontWeight: FontWeight.w900,
                     color: Colors.black,
                   ),
@@ -1537,166 +1904,116 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
 
     return Column(
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: ElevatedButton(
-                onPressed: () {
-                  final pool = _selectedDigits.isEmpty ? digitOptions : _selectedDigits.toList();
-                  final r = math.Random();
-                  final nums = <String>[];
-                  for (int i = 0; i < 5; i++) {
-                    nums.add('${pool[r.nextInt(pool.length)]}${pool[r.nextInt(pool.length)]}${pool[r.nextInt(pool.length)]}');
-                  }
-                  _appendBets(nums, _normalizedModes().isEmpty ? ['box'] : _normalizedModes(), int.tryParse(_points) ?? _selectedRate);
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFDC2626),
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                ),
-                child: const Text('Motor', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800)),
-              ),
-            ),
-            const SizedBox(width: 4),
-            Expanded(
-              child: ElevatedButton(
-                onPressed: () {
-                  final q = (int.tryParse(_qty) ?? 10).clamp(1, 50);
-                  final nums = _luckyNumbers(q, _lPickType);
-                  _appendBets(nums, [_lPickType], int.tryParse(_points) ?? _selectedRate);
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFFBBF24),
-                  foregroundColor: const Color(0xFF78350F),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                ),
-                child: const Text('Lucky Pick', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800)),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 3),
         Expanded(
           child: Container(
             decoration: BoxDecoration(
-              color: const Color(0xFFD5D5D5),
-              border: Border.all(color: const Color(0xFF8B8B8B)),
-              borderRadius: BorderRadius.circular(2),
+              color: const Color(0xFFE5E7EB),
+              border: Border.all(color: const Color(0xFF9CA3AF)),
+              borderRadius: BorderRadius.circular(6),
             ),
-            padding: const EdgeInsets.all(6),
+            padding: const EdgeInsets.all(4),
             child: Column(
               children: [
                 Row(
                   children: [
-                    _ThreeDGradientSquareButton(
-                      label: '-',
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFF4B5563), Color(0xFF374151)],
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
+                    SizedBox(
+                      width: 30,
+                      height: 26,
+                      child: ElevatedButton(
+                        onPressed: () => _adjustActive(-1),
+                        style: ElevatedButton.styleFrom(
+                          elevation: 0,
+                          backgroundColor: const Color(0xFF475569),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            side: const BorderSide(color: Color(0xFF334155)),
+                          ),
+                          padding: EdgeInsets.zero,
+                        ),
+                        child: const Text('-', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
                       ),
-                      border: const Color(0xFF2F3946),
-                      onTap: () => _adjustActive(-1),
                     ),
-                    const SizedBox(width: 6),
+                    const SizedBox(width: 2),
                     Expanded(
                       child: Container(
-                        height: 36,
+                        height: 26,
                         alignment: Alignment.center,
                         decoration: BoxDecoration(
-                          color: const Color(0xFFF7F7F7),
-                          border: Border.all(color: const Color(0xFF8A8A8A)),
+                          color: const Color(0xFFF8FAFC),
+                          border: Border.all(color: const Color(0xFF9CA3AF)),
+                          borderRadius: BorderRadius.circular(3),
                         ),
                         child: Text(
                           centerValue,
                           style: const TextStyle(
                             color: Colors.black,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w800,
                             height: 1,
                           ),
                         ),
                       ),
                     ),
-                    const SizedBox(width: 6),
-                    _ThreeDGradientSquareButton(
-                      label: '+',
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFF22C55E), Color(0xFF16A34A)],
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
+                    const SizedBox(width: 2),
+                    SizedBox(
+                      width: 30,
+                      height: 26,
+                      child: ElevatedButton(
+                        onPressed: () => _adjustActive(1),
+                        style: ElevatedButton.styleFrom(
+                          elevation: 0,
+                          backgroundColor: const Color(0xFF22C55E),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            side: const BorderSide(color: Color(0xFF16A34A)),
+                          ),
+                          padding: EdgeInsets.zero,
+                        ),
+                        child: const Text('+', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
                       ),
-                      border: const Color(0xFF15803D),
-                      onTap: () => _adjustActive(1),
                     ),
                   ],
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 2),
                 Expanded(
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', 'C', 'X'];
-                      const spacing = 4.0;
-                      const columns = 4.0;
-                      const rows = 3.0;
-                      final tileWidth = (constraints.maxWidth - ((columns - 1) * spacing)) / columns;
-                      final tileHeight = (constraints.maxHeight - ((rows - 1) * spacing)) / rows;
-                      final ratio = tileWidth > 0 && tileHeight > 0 ? tileWidth / tileHeight : 1.0;
-                      return GridView.builder(
-                        physics: const NeverScrollableScrollPhysics(),
-                        itemCount: keys.length,
-                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: columns.toInt(),
-                          crossAxisSpacing: spacing,
-                          mainAxisSpacing: spacing,
-                          childAspectRatio: ratio,
+                  child: Column(
+                    children: [
+                      Expanded(
+                        child: GridView.count(
+                          physics: const NeverScrollableScrollPhysics(),
+                          crossAxisCount: 3,
+                          mainAxisSpacing: 1.5,
+                          crossAxisSpacing: 1.5,
+                          childAspectRatio: 2.45,
+                          children: [
+                            _keypadButton('1'),
+                            _keypadButton('2'),
+                            _keypadButton('3'),
+                            _keypadButton('4'),
+                            _keypadButton('5'),
+                            _keypadButton('6'),
+                            _keypadButton('7'),
+                            _keypadButton('8'),
+                            _keypadButton('9'),
+                            _keypadButton('0'),
+                            _keypadButton(
+                              'X',
+                              backgroundColor: const Color(0xFFF04438),
+                              textColor: Colors.white,
+                            ),
+                            const SizedBox.shrink(),
+                          ],
                         ),
-                        itemBuilder: (context, index) {
-                          final k = keys[index];
-                          final isRed = k == 'C' || k == 'X';
-                          return ElevatedButton(
-                            onPressed: () {
-                              if (k == 'C') {
-                                _clearActive();
-                                return;
-                              }
-                              if (k == 'X') {
-                                _deleteOne();
-                                return;
-                              }
-                              _digitInput(k);
-                            },
-                            style: ElevatedButton.styleFrom(
-                              elevation: 0,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(2),
-                                side: BorderSide(
-                                  color: isRed ? const Color(0xFFD63F35) : const Color(0xFF8A8A8A),
-                                ),
-                              ),
-                              backgroundColor: isRed ? const Color(0xFFF04438) : const Color(0xFFF4F4F4),
-                              foregroundColor: isRed ? Colors.white : Colors.black,
-                              padding: EdgeInsets.zero,
-                            ),
-                            child: Text(
-                              k,
-                              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
-                            ),
-                          );
-                        },
-                      );
-                    },
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 2),
                 SizedBox(
                   width: double.infinity,
-                  height: 30,
+                  height: 26,
                   child: ElevatedButton(
                     onPressed: () {
                       if (_inputNumber.isNotEmpty || _rangeFrom.isNotEmpty || _rangeTo.isNotEmpty || _qty.isNotEmpty) {
@@ -1712,14 +2029,14 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
                       backgroundColor: const Color(0xFF4F46E5),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(2),
-                        side: const BorderSide(color: Color(0xFF3730A3)),
+                        side: const BorderSide(color: Color(0xFF4338CA)),
                       ),
                     ),
                     child: const Text(
                       'NEXT',
                       style: TextStyle(
                         color: Colors.white,
-                        fontSize: 16,
+                        fontSize: 9,
                         fontWeight: FontWeight.w700,
                         height: 1,
                       ),
@@ -1743,7 +2060,7 @@ class _ThreeDLoadingView extends StatelessWidget {
     return Container(
       width: double.infinity,
       height: double.infinity,
-      color: Colors.white,
+      color: const Color(0xFF0B1223),
       child: const Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
@@ -1786,19 +2103,19 @@ class _ThreeDGradientSquareButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: 36,
-      height: 36,
+      width: 40,
+      height: 40,
       child: DecoratedBox(
         decoration: BoxDecoration(
           gradient: gradient,
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(6),
           border: Border.all(color: border),
         ),
         child: TextButton(
           onPressed: onTap,
           style: TextButton.styleFrom(
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(6),
             ),
             padding: EdgeInsets.zero,
           ),
@@ -1806,7 +2123,7 @@ class _ThreeDGradientSquareButton extends StatelessWidget {
             label,
             style: const TextStyle(
               color: Colors.white,
-              fontSize: 16,
+              fontSize: 18,
               height: 1,
             ),
           ),
