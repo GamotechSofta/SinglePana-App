@@ -13,6 +13,7 @@ import 'pages/history/market_results_screen.dart';
 import 'pages/history/my_bets_page.dart';
 import 'pages/lottery_page.dart';
 import 'pages/lottery_3d_page.dart';
+import 'pages/lottery_3d_account_page.dart';
 import 'pages/lottery_3d_subpages.dart';
 import 'pages/lottery_old_results_page.dart';
 import 'pages/lottery_quiz_page.dart';
@@ -120,9 +121,9 @@ class _SinglePanaAppState extends State<SinglePanaApp> with WidgetsBindingObserv
               path: '/lottery/3d/result',
               child: Lottery3DResultPage(),
             ),
-        '/lottery/3d/account': (_) => const MainShell(
+        '/lottery/3d/account': (_) => MainShell(
               path: '/lottery/3d/account',
-              child: Lottery3DAccountPage(),
+              child: const Lottery3DAccountPage(),
             ),
         '/lottery/3d/quiz': (_) => const MainShell(
               path: '/lottery/3d/quiz',

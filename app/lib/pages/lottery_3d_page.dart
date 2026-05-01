@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
 import '../config/api_config.dart';
+import 'lottery_3d_account_page.dart';
 import 'lottery_3d_advance_page.dart';
 import 'lottery_3d_subpages.dart';
 import '../services/auth_service.dart';
@@ -182,7 +183,13 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
     _keepLandscapeOnExit = true;
     await _configureOrientationForLottery();
     if (!mounted) return;
-    await Navigator.of(context).maybePop();
+    await Navigator.of(context).pushNamedAndRemoveUntil(
+      '/lottery',
+      (route) {
+        final name = route.settings.name;
+        return name == '/' || name == '/home';
+      },
+    );
   }
 
   Future<Map<String, String>> _authHeaders() async {
@@ -527,7 +534,7 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
     setState(() {
       _bets.addAll(created);
       _inputNumber = '';
-      _points = '0';
+      _points = '$_selectedRate';
       _rangeFrom = '';
       _rangeTo = '';
       _qty = '';
@@ -537,7 +544,7 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
   }
 
   void _addBet() {
-    final pts = int.tryParse(_points) ?? _selectedRate;
+    final pts = _selectedRate;
     if (pts <= 0) {
       setState(() => _validationMsg = 'Points must be greater than 0.');
       return;
@@ -590,32 +597,9 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
         final next = '$v$d'.replaceAll(RegExp(r'\D'), '');
         return next.substring(0, math.min(max, next.length));
       }
-      switch (_activeTarget) {
-        case _InputTarget.points:
-          _points = append(_points == '0' ? '' : _points, 4);
-          if (_points.isEmpty) _points = '0';
-          break;
-        case _InputTarget.number:
-          final before = _inputNumber.length;
-          _inputNumber = append(_inputNumber, 3);
-          if (before < 3 && _inputNumber.length == 3) autoAdd = true;
-          break;
-        case _InputTarget.rangeFrom:
-          final before = _rangeFrom.length;
-          _rangeFrom = append(_rangeFrom, 3);
-          if (before < 3 && _rangeFrom.length == 3 && _rangeTo.length < 3) {
-            _activeTarget = _InputTarget.rangeTo;
-          }
-          break;
-        case _InputTarget.rangeTo:
-          final before = _rangeTo.length;
-          _rangeTo = append(_rangeTo, 3);
-          if (before < 3 && _rangeTo.length == 3 && _rangeFrom.length == 3) autoAdd = true;
-          break;
-        case _InputTarget.qty:
-          _qty = append(_qty, 3);
-          break;
-      }
+      final before = _inputNumber.length;
+      _inputNumber = append(_inputNumber, 3);
+      if (before < 3 && _inputNumber.length == 3) autoAdd = true;
       _validationMsg = '';
     });
     if (autoAdd) {
@@ -628,75 +612,21 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
 
   void _deleteOne() {
     setState(() {
-      switch (_activeTarget) {
-        case _InputTarget.points:
-          _points = _points.isEmpty ? '0' : _points.substring(0, math.max(0, _points.length - 1));
-          if (_points.isEmpty) _points = '0';
-          break;
-        case _InputTarget.number:
-          _inputNumber = _inputNumber.substring(0, math.max(0, _inputNumber.length - 1));
-          break;
-        case _InputTarget.rangeFrom:
-          _rangeFrom = _rangeFrom.substring(0, math.max(0, _rangeFrom.length - 1));
-          break;
-        case _InputTarget.rangeTo:
-          _rangeTo = _rangeTo.substring(0, math.max(0, _rangeTo.length - 1));
-          break;
-        case _InputTarget.qty:
-          _qty = _qty.substring(0, math.max(0, _qty.length - 1));
-          break;
-      }
+      _inputNumber = _inputNumber.substring(0, math.max(0, _inputNumber.length - 1));
       _validationMsg = '';
     });
   }
 
   void _clearActive() {
     setState(() {
-      switch (_activeTarget) {
-        case _InputTarget.points:
-          _points = '0';
-          break;
-        case _InputTarget.number:
-          _inputNumber = '';
-          break;
-        case _InputTarget.rangeFrom:
-          _rangeFrom = '';
-          break;
-        case _InputTarget.rangeTo:
-          _rangeTo = '';
-          break;
-        case _InputTarget.qty:
-          _qty = '';
-          break;
-      }
+      _inputNumber = '';
       _validationMsg = '';
     });
   }
 
   void _adjustActive(int delta) {
-    int current;
-    switch (_activeTarget) {
-      case _InputTarget.points:
-        current = int.tryParse(_points) ?? 0;
-        setState(() => _points = math.max(0, current + delta).toString());
-        break;
-      case _InputTarget.number:
-        current = int.tryParse(_inputNumber) ?? 0;
-        setState(() => _inputNumber = math.max(0, math.min(999, current + delta)).toString());
-        break;
-      case _InputTarget.rangeFrom:
-        current = int.tryParse(_rangeFrom) ?? 0;
-        setState(() => _rangeFrom = math.max(0, math.min(999, current + delta)).toString());
-        break;
-      case _InputTarget.rangeTo:
-        current = int.tryParse(_rangeTo) ?? 0;
-        setState(() => _rangeTo = math.max(0, math.min(999, current + delta)).toString());
-        break;
-      case _InputTarget.qty:
-        current = int.tryParse(_qty) ?? 0;
-        setState(() => _qty = math.max(0, math.min(999, current + delta)).toString());
-        break;
-    }
+    final current = int.tryParse(_inputNumber) ?? 0;
+    setState(() => _inputNumber = math.max(0, math.min(999, current + delta)).toString());
   }
 
   bool get _slotOpenForBuy {
@@ -821,12 +751,38 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
     _addToast('Ticket cancelled');
   }
 
+  void _resetAllFields() {
+    setState(() {
+      _selectedModes
+        ..clear()
+        ..add('box');
+      _selectedPanels
+        ..clear()
+        ..add('A');
+      _selectedDigits.clear();
+      _selectedRate = 10;
+      _inputNumber = '';
+      _points = '10';
+      _rangeFrom = '';
+      _rangeTo = '';
+      _qty = '';
+      _lPickType = 'box';
+      _activeTarget = _InputTarget.number;
+      _validationMsg = '';
+      _toast = '';
+      _bets.clear();
+      _tickets.clear();
+      _selectedAdvanceSlots = const [];
+    });
+  }
+
   void _headerAction(String label) {
     if (label == 'Refresh') {
+      _resetAllFields();
       unawaited(_syncQuizSlot());
       unawaited(_syncLastSlotResult());
       unawaited(_loadWalletBalance());
-      _addToast('Refreshed');
+      _addToast('All fields cleared');
       return;
     }
     if (label == 'Quiz') {
@@ -1052,8 +1008,14 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
     final lastTicket = _tickets.isEmpty ? null : _tickets.first;
     final resultFresh = _lastResultUpdatedAt != null && DateTime.now().difference(_lastResultUpdatedAt!).inSeconds < 2;
 
-    return Theme(
-      data: Theme.of(context).copyWith(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        unawaited(_goBackTo2DGame());
+      },
+      child: Theme(
+        data: Theme.of(context).copyWith(
         textTheme: Theme.of(context).textTheme.apply(fontSizeFactor: 1).copyWith(
               bodyLarge: const TextStyle(fontSize: 10),
               bodyMedium: const TextStyle(fontSize: 10),
@@ -1074,16 +1036,16 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
           ),
         ),
       ),
-      child: DefaultTextStyle(
-        style: const TextStyle(fontSize: 10),
-        child: Container(
-          color: const Color(0xFF0B1223),
-          child: SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(2),
-              child: _booting
-                  ? const _ThreeDLoadingView()
-                  : Container(
+        child: DefaultTextStyle(
+          style: const TextStyle(fontSize: 10),
+          child: Container(
+            color: const Color(0xFF0B1223),
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(2),
+                child: _booting
+                    ? const _ThreeDLoadingView()
+                    : Container(
                       decoration: BoxDecoration(
                         color: const Color(0xFFF3F4F6),
                         border: Border.all(color: const Color(0xFFCBD5E1)),
@@ -1136,6 +1098,7 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
                         ],
                       ),
                     ),
+              ),
             ),
           ),
         ),
@@ -1308,7 +1271,7 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
                 child: Text(
                   label,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w800),
+                  style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800),
                 ),
               ),
             ),
@@ -1414,7 +1377,7 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
                 for (int i = 0; i < 5; i++) {
                   nums.add('${pool[r.nextInt(pool.length)]}${pool[r.nextInt(pool.length)]}${pool[r.nextInt(pool.length)]}');
                 }
-                _appendBets(nums, _normalizedModes().isEmpty ? ['box'] : _normalizedModes(), int.tryParse(_points) ?? _selectedRate);
+                _appendBets(nums, _normalizedModes().isEmpty ? ['box'] : _normalizedModes(), _selectedRate);
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFFDC2626),
@@ -1433,7 +1396,7 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
               onPressed: () {
                 final q = (int.tryParse(_qty) ?? 10).clamp(1, 50);
                 final nums = _luckyNumbers(q, _lPickType);
-                _appendBets(nums, [_lPickType], int.tryParse(_points) ?? _selectedRate);
+                _appendBets(nums, [_lPickType], _selectedRate);
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFFFBBF24),
@@ -1525,9 +1488,9 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
   }
 
   Widget _pillField(String label, String value, _InputTarget target) {
-    final active = _activeTarget == target;
+    final active = target == _InputTarget.number;
     return InkWell(
-      onTap: () => setState(() => _activeTarget = target),
+      onTap: () => setState(() => _activeTarget = _InputTarget.number),
       child: Container(
         height: 24,
         width: label == 'ADD NUMBER' ? 118 : 58,
@@ -1551,13 +1514,16 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
         children: [
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
-            child: Row(children: [
-              _labeledInput('ADD NUMBER', _pillField('ADD NUMBER', _inputNumber, _InputTarget.number)),
-              const SizedBox(width: 4),
-              _labeledInput('RANGE', _pillField('NUM.', _rangeFrom, _InputTarget.rangeFrom)),
-              const SizedBox(width: 4),
-              _labeledInput('TO', _pillField('NUM.', _rangeTo, _InputTarget.rangeTo)),
-            ]),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+              child: Row(children: [
+                _labeledInput('ADD NUMBER', _pillField('ADD NUMBER', _inputNumber, _InputTarget.number)),
+                const SizedBox(width: 6),
+                _labeledInput('RANGE', _pillField('NUM.', _rangeFrom, _InputTarget.rangeFrom)),
+                const SizedBox(width: 6),
+                _labeledInput('TO', _pillField('NUM.', _rangeTo, _InputTarget.rangeTo)),
+              ]),
+            ),
           ),
           const SizedBox(height: 2),
           Row(
@@ -1595,22 +1561,29 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
                   ),
                 ),
               ),
-              const SizedBox(width: 6),
+              const SizedBox(width: 8),
               _labeledInput('QTY', _pillField('Qty', _qty, _InputTarget.qty)),
-              const SizedBox(width: 4),
+              const SizedBox(width: 8),
               SizedBox(
-                height: 34,
+                height: 24,
                 child: ElevatedButton(
                   onPressed: _addBet,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF111827),
-                    foregroundColor: const Color(0xFF10B981),
+                    foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(18),
+                      borderRadius: BorderRadius.circular(22),
                       side: const BorderSide(color: Color(0xFF334155)),
                     ),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
                   ),
-                  child: const Text('ADD', style: TextStyle(fontWeight: FontWeight.w900)),
+                  child: const Text(
+                    'ADD',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                      color: Colors.white,
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -1655,13 +1628,12 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
       onTap: () => setState(() {
         _selectedRate = rate;
         _points = '$rate';
-        _activeTarget = _InputTarget.points;
       }),
       borderRadius: BorderRadius.circular(10),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 140),
         curve: Curves.easeOut,
-        width: selected ? 56 : 42,
+        width: 38,
         height: 24,
         alignment: Alignment.center,
         decoration: BoxDecoration(
@@ -1673,7 +1645,7 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
           '$rate',
           style: TextStyle(
             color: Colors.white,
-            fontSize: selected ? 10 : 9,
+            fontSize: 9,
             fontWeight: FontWeight.w800,
           ),
         ),
@@ -1883,24 +1855,7 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
   }
 
   Widget _buildRightSection() {
-    String centerValue;
-    switch (_activeTarget) {
-      case _InputTarget.points:
-        centerValue = _points;
-        break;
-      case _InputTarget.number:
-        centerValue = _inputNumber.isEmpty ? '0' : _inputNumber;
-        break;
-      case _InputTarget.rangeFrom:
-        centerValue = _rangeFrom.isEmpty ? '0' : _rangeFrom;
-        break;
-      case _InputTarget.rangeTo:
-        centerValue = _rangeTo.isEmpty ? '0' : _rangeTo;
-        break;
-      case _InputTarget.qty:
-        centerValue = _qty.isEmpty ? '0' : _qty;
-        break;
-    }
+    final centerValue = _inputNumber.isEmpty ? '0' : _inputNumber;
 
     return Column(
       children: [
@@ -2020,9 +1975,7 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
                         _addBet();
                         return;
                       }
-                      setState(() {
-                        _activeTarget = _InputTarget.values[(_activeTarget.index + 1) % _InputTarget.values.length];
-                      });
+                      _addToast('Enter Add Number');
                     },
                     style: ElevatedButton.styleFrom(
                       elevation: 0,

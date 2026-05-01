@@ -6,7 +6,6 @@ import 'package:http/http.dart' as http;
 
 import '../config/api_config.dart';
 import '../services/auth_service.dart';
-import '../services/wallet_service.dart';
 
 class Lottery3DResultPage extends StatefulWidget {
   const Lottery3DResultPage({super.key});
@@ -227,141 +226,6 @@ class _Lottery3DResultPageState extends State<Lottery3DResultPage> {
                         ),
                       ],
                     ),
-    );
-  }
-}
-
-class Lottery3DAccountPage extends StatefulWidget {
-  const Lottery3DAccountPage({super.key});
-
-  @override
-  State<Lottery3DAccountPage> createState() => _Lottery3DAccountPageState();
-}
-
-class _Lottery3DAccountPageState extends State<Lottery3DAccountPage> {
-  bool _loading = true;
-  Map<String, dynamic> _user = const {};
-  num _wallet = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  String _pick(Map<String, dynamic> user, List<String> keys, {String fallback = '-'}) {
-    for (final k in keys) {
-      final v = user[k];
-      if (v == null) continue;
-      final s = v.toString().trim();
-      if (s.isNotEmpty) return s;
-    }
-    return fallback;
-  }
-
-  Map<String, dynamic> _normalizeUser(dynamic raw) {
-    if (raw is! Map) return <String, dynamic>{};
-    final top = Map<String, dynamic>.from(raw);
-    final nestedUser = top['user'] is Map ? Map<String, dynamic>.from(top['user'] as Map) : <String, dynamic>{};
-    final nestedProfile = top['profile'] is Map ? Map<String, dynamic>.from(top['profile'] as Map) : <String, dynamic>{};
-    final nestedData = top['data'] is Map ? Map<String, dynamic>.from(top['data'] as Map) : <String, dynamic>{};
-    final nestedDataUser = nestedData['user'] is Map ? Map<String, dynamic>.from(nestedData['user'] as Map) : <String, dynamic>{};
-
-    return <String, dynamic>{
-      ...top,
-      ...nestedData,
-      ...nestedUser,
-      ...nestedDataUser,
-      ...nestedProfile,
-    };
-  }
-
-  Future<void> _load() async {
-    final raw = await AuthService.instance.getStoredUser() ?? <String, dynamic>{};
-    final u = _normalizeUser(raw);
-    final balanceRes = await WalletService.instance.fetchBalance();
-    final fallback = u['balance'] ?? u['walletBalance'] ?? u['wallet'] ?? 0;
-    final fallbackNum = fallback is num ? fallback : num.tryParse('$fallback') ?? 0;
-    if (!mounted) return;
-    setState(() {
-      _user = u;
-      _wallet = balanceRes.success && balanceRes.balance != null ? balanceRes.balance! : fallbackNum;
-      _loading = false;
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final first = _pick(_user, ['firstName', 'firstname', 'givenName'], fallback: '');
-    final last = _pick(_user, ['lastName', 'lastname', 'surname'], fallback: '');
-    final merged = '$first $last'.trim();
-    final name = merged.isNotEmpty
-        ? merged
-        : _pick(_user, ['name', 'fullName', 'displayName', 'userName', 'username', 'phone'], fallback: '-');
-    final userId = _pick(_user, ['id', '_id', 'userId', 'uid', 'userName', 'username'], fallback: '-');
-    final phone = _pick(_user, ['phone', 'mobile'], fallback: '-');
-    final email = _pick(_user, ['email'], fallback: '-');
-
-    return _Lottery3DSubPageTemplate(
-      title: '3D Account',
-      subtitle: 'Account details for 3D game',
-      icon: Icons.account_circle_rounded,
-      child: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : Padding(
-              padding: const EdgeInsets.all(12),
-              child: Container(
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  border: Border.all(color: const Color(0xFFD9D9D9)),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          const Expanded(
-                            child: Text(
-                              'Account Details',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w800,
-                                color: Colors.black,
-                              ),
-                            ),
-                          ),
-                          InkWell(
-                            onTap: () => Navigator.of(context).maybePop(),
-                            child: const Padding(
-                              padding: EdgeInsets.symmetric(horizontal: 2),
-                              child: Text(
-                                '×',
-                                style: TextStyle(
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.w900,
-                                  color: Colors.black,
-                                  height: 1,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      _AccountRow(label: 'Name', value: name),
-                      _AccountRow(label: 'User ID', value: userId),
-                      _AccountRow(label: 'Phone', value: phone),
-                      _AccountRow(label: 'Email', value: email),
-                      _AccountRow(label: 'Wallet', value: '₹$_wallet'),
-                    ],
-                  ),
-                ),
-              ),
-            ),
     );
   }
 }
@@ -1655,8 +1519,8 @@ class _Lottery3DHistoryViewState extends State<_Lottery3DHistoryView> {
                           child: Container(
                             padding: const EdgeInsets.all(10),
                             decoration: BoxDecoration(
-                              color: const Color(0xFF4F4F4F),
-                              border: Border.all(color: const Color(0xFF6D6D6D)),
+                              color: Colors.white,
+                              border: Border.all(color: const Color(0xFFD1D5DB)),
                               borderRadius: BorderRadius.circular(6),
                             ),
                             child: SingleChildScrollView(
@@ -1679,8 +1543,8 @@ class _Lottery3DHistoryViewState extends State<_Lottery3DHistoryView> {
                           child: Container(
                             padding: const EdgeInsets.all(10),
                             decoration: BoxDecoration(
-                              color: const Color(0xFF4F4F4F),
-                              border: Border.all(color: const Color(0xFF6D6D6D)),
+                              color: Colors.white,
+                              border: Border.all(color: const Color(0xFFD1D5DB)),
                               borderRadius: BorderRadius.circular(6),
                             ),
                             child: ListView.separated(
@@ -1941,32 +1805,3 @@ class _TicketLine extends StatelessWidget {
   }
 }
 
-class _AccountRow extends StatelessWidget {
-  const _AccountRow({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: RichText(
-        text: TextSpan(
-          style: const TextStyle(
-            fontSize: 14,
-            color: Colors.black,
-            fontWeight: FontWeight.w700,
-          ),
-          children: [
-            TextSpan(text: '$label: '),
-            TextSpan(
-              text: value,
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}

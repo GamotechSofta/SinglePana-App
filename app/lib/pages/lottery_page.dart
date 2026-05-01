@@ -991,7 +991,11 @@ class _LotteryPageState extends State<LotteryPage> {
         !_slotOpenForBuy;
 
     return PopScope(
-      onPopInvokedWithResult: (didPop, result) {},
+      canPop: true,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) return;
+        unawaited(_restorePortraitOrientation());
+      },
       child: ColoredBox(
         color: const Color(0xFF111111),
         child: LayoutBuilder(
