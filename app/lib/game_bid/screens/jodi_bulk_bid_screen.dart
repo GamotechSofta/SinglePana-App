@@ -40,6 +40,7 @@ class _JodiBulkBidScreenState extends State<JodiBulkBidScreen> {
   late final Map<String, TextEditingController> _colBulkCtrls;
   final Map<String, Timer> _rowTimers = {};
   final Map<String, Timer> _colTimers = {};
+  int? _activeQuickPoint;
 
   @override
   void initState() {
@@ -148,8 +149,7 @@ class _JodiBulkBidScreenState extends State<JodiBulkBidScreen> {
       if (values.length == 1) {
         for (final c in _digits) {
           final key = '$r$c';
-          final cur = int.tryParse(_cells[key] ?? '') ?? 0;
-          _cells[key] = '${cur + values.first}';
+          _cells[key] = '${values.first}';
         }
       } else {
         for (var i = 0; i < _digits.length && i < values.length; i++) {
@@ -172,8 +172,7 @@ class _JodiBulkBidScreenState extends State<JodiBulkBidScreen> {
       if (values.length == 1) {
         for (final r in _digits) {
           final key = '$r$c';
-          final cur = int.tryParse(_cells[key] ?? '') ?? 0;
-          _cells[key] = '${cur + values.first}';
+          _cells[key] = '${values.first}';
         }
       } else {
         for (var i = 0; i < _digits.length && i < values.length; i++) {
@@ -188,20 +187,30 @@ class _JodiBulkBidScreenState extends State<JodiBulkBidScreen> {
     });
   }
 
-  void _applyAllQuick(int p) {
+  void _applyQuickToRow(String r) {
+    final p = _activeQuickPoint;
+    if (p == null) return;
     setState(() {
-      for (final key in _cells.keys) {
-        _cells[key] = '$p';
+      for (final c in _digits) {
+        _cells['$r$c'] = '$p';
       }
     });
   }
 
-  bool _isQuickSelected(int p) {
-    if (_cells.isEmpty) return false;
-    for (final v in _cells.values) {
-      if ((int.tryParse(v) ?? 0) != p) return false;
-    }
-    return true;
+  void _applyQuickToCol(String c) {
+    final p = _activeQuickPoint;
+    if (p == null) return;
+    setState(() {
+      for (final r in _digits) {
+        _cells['$r$c'] = '$p';
+      }
+    });
+  }
+
+  void _applyQuickToCell(String key) {
+    final p = _activeQuickPoint;
+    if (p == null) return;
+    setState(() => _cells[key] = '$p');
   }
 
   void _clearAll() {
@@ -215,6 +224,7 @@ class _JodiBulkBidScreenState extends State<JodiBulkBidScreen> {
       for (final c in _colBulkCtrls.values) {
         c.clear();
       }
+      _activeQuickPoint = null;
     });
   }
 
@@ -319,6 +329,14 @@ class _JodiBulkBidScreenState extends State<JodiBulkBidScreen> {
               ),
             ],
           ),
+          if (_activeQuickPoint != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 4, bottom: 2),
+              child: Text(
+                'Quick point ₹$_activeQuickPoint selected. Tap any row digit, column digit, or jodi (00-99) to apply.',
+                style: TextStyle(color: CasinoUi.mutedGold(0.78), fontSize: 10),
+              ),
+            ),
           const SizedBox(height: GameBidUi.quickPointsHeaderToChipsGap),
           Wrap(
             spacing: 6,
@@ -326,10 +344,10 @@ class _JodiBulkBidScreenState extends State<JodiBulkBidScreen> {
             children: _quickPoints
                 .map(
                   (p) => GameBidUi.quickPointsChip(
-                    selected: _isQuickSelected(p),
+                    selected: _activeQuickPoint == p,
                     label: '$p',
                     extent: tile,
-                    onSelected: (_) => _applyAllQuick(p),
+                    onSelected: (_) => setState(() => _activeQuickPoint = p),
                   ),
                 )
                 .toList(),
@@ -345,7 +363,16 @@ class _JodiBulkBidScreenState extends State<JodiBulkBidScreen> {
                     for (final c in _digits)
                       SizedBox(
                         width: 38,
-                        child: Center(child: Text(c, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: CasinoUi.lightGold))),
+                        child: InkWell(
+                          onTap: () => _applyQuickToCol(c),
+                          borderRadius: BorderRadius.circular(6),
+                          child: Center(
+                            child: Text(
+                              c,
+                              style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: CasinoUi.lightGold),
+                            ),
+                          ),
+                        ),
                       ),
                   ],
                 ),
@@ -392,7 +419,16 @@ class _JodiBulkBidScreenState extends State<JodiBulkBidScreen> {
                     children: [
                       SizedBox(
                         width: 18,
-                        child: Center(child: Text(r, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: CasinoUi.lightGold))),
+                        child: InkWell(
+                          onTap: () => _applyQuickToRow(r),
+                          borderRadius: BorderRadius.circular(6),
+                          child: Center(
+                            child: Text(
+                              r,
+                              style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: CasinoUi.lightGold),
+                            ),
+                          ),
+                        ),
                       ),
                       SizedBox(
                         width: 54,
@@ -443,6 +479,7 @@ class _JodiBulkBidScreenState extends State<JodiBulkBidScreen> {
                                   key: ValueKey('joc_${r}_${c}_${_cells['$r$c']}'),
                                   initialValue: _cells['$r$c'],
                                   onChanged: (v) => setState(() => _cells['$r$c'] = _sanitize(v)),
+                                  onTap: () => _applyQuickToCell('$r$c'),
                                   textAlign: TextAlign.center,
                                   keyboardType: TextInputType.number,
                                   style: GameBidUi.betInputStyle(fontSize: 10, fontWeight: FontWeight.w600),

@@ -104,6 +104,33 @@ class _AddFundTabState extends State<AddFundTab> {
     return 'https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=$data';
   }
 
+  Uri? _upiPayUri() {
+    final upiId = _config?['upiId']?.toString().trim() ?? '';
+    if (upiId.isEmpty) return null;
+    final upiName = _config?['upiName']?.toString().trim();
+    final amount = num.tryParse(_amountCtrl.text.trim());
+    final qp = <String, String>{
+      'pa': upiId,
+      'pn': (upiName == null || upiName.isEmpty) ? 'SinglePana' : upiName,
+      'cu': 'INR',
+    };
+    if (amount != null && amount > 0) {
+      qp['am'] = amount.toStringAsFixed(0);
+    }
+    return Uri(scheme: 'upi', host: 'pay', queryParameters: qp);
+  }
+
+  Future<void> _openUpiApp() async {
+    final uri = _upiPayUri();
+    if (uri == null) {
+      setState(() => _err = 'UPI ID not configured yet. Please try again.');
+      return;
+    }
+    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (launched || !mounted) return;
+    setState(() => _err = 'No UPI app found. Please install PhonePe, Google Pay, or Paytm.');
+  }
+
   Future<void> _pickImage() async {
     final x = await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 2000);
     if (x == null) return;
@@ -405,6 +432,23 @@ class _AddFundTabState extends State<AddFundTab> {
           child: upiId.isEmpty
               ? const CircularProgressIndicator(color: AppColors.gold)
               : Image.network(_qrUrl(), width: 160, height: 160),
+        ),
+        const SizedBox(height: 8),
+        FilledButton.icon(
+          onPressed: upiId.isEmpty ? null : _openUpiApp,
+          icon: const Icon(Icons.account_balance_wallet_outlined, size: 18),
+          label: const Text('Pay with UPI App'),
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFF7C3AED),
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(
+              vertical: AppSpacing.buttonPaddingV,
+              horizontal: AppSpacing.buttonPaddingH,
+            ),
+            minimumSize: const Size(0, AppSpacing.buttonMinHeight),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            visualDensity: VisualDensity.compact,
+          ),
         ),
         const SizedBox(height: 8),
         ListTile(

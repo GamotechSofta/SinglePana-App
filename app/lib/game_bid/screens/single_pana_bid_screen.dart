@@ -121,6 +121,17 @@ class _SinglePanaBidScreenState extends State<SinglePanaBidScreen> {
     });
   }
 
+  void _tryAutoAddEasy() {
+    final n = _numCtrl.text.trim();
+    final pts = int.tryParse(_ptsCtrl.text.trim()) ?? 0;
+    if (n.length != 3 || pts <= 0 || !isValidSinglePana(n)) return;
+    setState(() {
+      _mergeAdd(n, pts);
+      _numCtrl.clear();
+      _ptsCtrl.clear();
+    });
+  }
+
   void _addBySum(int sumDigit) {
     final pts = int.tryParse(_ptsCtrl.text.trim()) ?? 0;
     if (pts <= 0) return _toast('Enter points first');
@@ -147,8 +158,12 @@ class _SinglePanaBidScreenState extends State<SinglePanaBidScreen> {
   Future<void> _submit() async {
     if (_easy) {
       final n = _numCtrl.text.trim();
-      final pts = int.tryParse(_ptsCtrl.text.trim()) ?? 0;
-      if (pts > 0 && isValidSinglePana(n)) {
+      final pText = _ptsCtrl.text.trim();
+      final hasPending = n.isNotEmpty || pText.isNotEmpty;
+      if (hasPending) {
+        final pts = int.tryParse(pText) ?? 0;
+        if (pts <= 0) return _toast('Enter points');
+        if (!isValidSinglePana(n)) return _toast('Invalid single pana');
         setState(() {
           _mergeAdd(n, pts);
           _numCtrl.clear();
@@ -262,6 +277,11 @@ class _SinglePanaBidScreenState extends State<SinglePanaBidScreen> {
               controller: _numCtrl,
               keyboardType: TextInputType.number,
               maxLength: 3,
+              onChanged: (_) {
+                setState(() {});
+                _tryAutoAddEasy();
+              },
+              onEditingComplete: _tryAutoAddEasy,
               onSubmitted: (_) => _addEasy(),
               decoration: GameBidUi.inputDecoration(labelText: 'Enter Pana', hintText: 'Pana', counterText: ''),
             ),
@@ -269,7 +289,11 @@ class _SinglePanaBidScreenState extends State<SinglePanaBidScreen> {
             TextField(
               controller: _ptsCtrl,
               keyboardType: TextInputType.number,
-              onChanged: (_) => setState(() {}),
+              onChanged: (_) {
+                setState(() {});
+                _tryAutoAddEasy();
+              },
+              onEditingComplete: _tryAutoAddEasy,
               onSubmitted: (_) => _addEasy(),
               decoration: GameBidUi.inputDecoration(labelText: 'Points'),
             ),
@@ -295,7 +319,10 @@ class _SinglePanaBidScreenState extends State<SinglePanaBidScreen> {
                   selected: sel,
                   label: '$p',
                   extent: tile,
-                  onSelected: (_) => setState(() => _ptsCtrl.text = '$p'),
+                  onSelected: (_) {
+                    setState(() => _ptsCtrl.text = '$p');
+                    _tryAutoAddEasy();
+                  },
                 );
               }).toList(),
             ),

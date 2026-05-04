@@ -52,6 +52,7 @@ class _SinglePanaBulkBidScreenState extends State<SinglePanaBulkBidScreen> {
 
   late final Map<String, String> _specialInputs;
   late final Map<String, TextEditingController> _groupBulkCtrls;
+  late final Map<String, int?> _groupQuickSelection;
 
   @override
   void initState() {
@@ -62,6 +63,7 @@ class _SinglePanaBulkBidScreenState extends State<SinglePanaBulkBidScreen> {
         for (final pana in list) pana: '',
     };
     _groupBulkCtrls = {for (var i = 0; i < 10; i++) '$i': TextEditingController()};
+    _groupQuickSelection = {for (var i = 0; i < 10; i++) '$i': null};
     _init();
   }
 
@@ -121,10 +123,12 @@ class _SinglePanaBulkBidScreenState extends State<SinglePanaBulkBidScreen> {
         for (final pana in list) {
           _specialInputs[pana] = '$n';
         }
+        _groupQuickSelection[groupKey] = _quickPoints.contains(n) ? n : null;
       } else {
         for (var i = 0; i < list.length && i < values.length; i++) {
           _specialInputs[list[i]] = '${values[i]}';
         }
+        _groupQuickSelection[groupKey] = null;
       }
       _groupBulkCtrls[groupKey]?.clear();
     });
@@ -140,13 +144,17 @@ class _SinglePanaBulkBidScreenState extends State<SinglePanaBulkBidScreen> {
         _specialInputs[pana] = '';
       }
       _groupBulkCtrls[groupKey]?.clear();
+      _groupQuickSelection[groupKey] = null;
     });
   }
 
   void _applyQuickGroupPoints(String groupKey, int points) {
     final c = _groupBulkCtrls[groupKey];
     if (c == null) return;
-    setState(() => c.text = '$points');
+    setState(() {
+      _groupQuickSelection[groupKey] = points;
+      c.text = '$points';
+    });
     _applyGroup(groupKey);
   }
 
@@ -168,6 +176,9 @@ class _SinglePanaBulkBidScreenState extends State<SinglePanaBulkBidScreen> {
       }
       for (final c in _groupBulkCtrls.values) {
         c.clear();
+      }
+      for (final k in _groupQuickSelection.keys) {
+        _groupQuickSelection[k] = null;
       }
     });
   }
@@ -360,7 +371,7 @@ class _SinglePanaBulkBidScreenState extends State<SinglePanaBulkBidScreen> {
                             scrollDirection: Axis.horizontal,
                             child: Row(
                               children: _quickPoints.map((p) {
-                                final sel = _groupBulkCtrls[groupKey]?.text.trim() == '$p';
+                                final sel = _groupQuickSelection[groupKey] == p;
                                 return Padding(
                                   padding: const EdgeInsets.only(right: 6),
                                   child: GameBidUi.quickPointsChip(
@@ -390,6 +401,7 @@ class _SinglePanaBulkBidScreenState extends State<SinglePanaBulkBidScreen> {
                       itemBuilder: (context, i) {
                         final num = list[i];
                         final val = _specialInputs[num] ?? '';
+                        final hasPoints = (int.tryParse(val) ?? 0) > 0;
                         return Row(
                           crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
@@ -408,6 +420,11 @@ class _SinglePanaBulkBidScreenState extends State<SinglePanaBulkBidScreen> {
                                   textAlign: TextAlign.center,
                                   textAlignVertical: TextAlignVertical.center,
                                   onChanged: (v) => setState(() => _specialInputs[num] = _sanitize(v)),
+                                  onTap: () {
+                                    if (_groupQuickSelection[groupKey] != null) {
+                                      setState(() => _groupQuickSelection[groupKey] = null);
+                                    }
+                                  },
                                   style: GameBidUi.betInputStyle(fontSize: 12, fontWeight: FontWeight.w600),
                                   decoration: InputDecoration(
                                     isDense: true,
@@ -418,7 +435,9 @@ class _SinglePanaBulkBidScreenState extends State<SinglePanaBulkBidScreen> {
                                     hintText: 'Pts',
                                     hintStyle: TextStyle(color: CasinoUi.mutedGold(0.45)),
                                     filled: true,
-                                    fillColor: CasinoUi.fieldFill,
+                                    fillColor: hasPoints
+                                        ? AppColors.neonGreenDeep.withValues(alpha: 0.22)
+                                        : CasinoUi.fieldFill,
                                     contentPadding: GameBidUi.bulkPanaPointsFieldPadding,
                                     border: border,
                                     enabledBorder: border,

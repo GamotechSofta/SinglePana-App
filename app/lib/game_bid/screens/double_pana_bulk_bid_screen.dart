@@ -391,6 +391,7 @@ class _DoublePanaBulkBidScreenState extends State<DoublePanaBulkBidScreen> {
                       itemBuilder: (context, i) {
                         final num = list[i];
                         final val = _specialInputs[num] ?? '';
+                        final hasPoints = (int.tryParse(val) ?? 0) > 0;
                         return Row(
                           crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
@@ -419,7 +420,9 @@ class _DoublePanaBulkBidScreenState extends State<DoublePanaBulkBidScreen> {
                                     hintText: 'Pts',
                                     hintStyle: TextStyle(color: CasinoUi.mutedGold(0.45)),
                                     filled: true,
-                                    fillColor: CasinoUi.fieldFill,
+                                    fillColor: hasPoints
+                                        ? AppColors.neonGreenDeep.withValues(alpha: 0.22)
+                                        : CasinoUi.fieldFill,
                                     contentPadding: GameBidUi.bulkPanaPointsFieldPadding,
                                     border: border,
                                     enabledBorder: border,
