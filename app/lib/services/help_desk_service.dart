@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 
 import '../config/api_config.dart';
 import 'auth_service.dart';
@@ -25,11 +26,14 @@ class HelpDeskService {
     final uri = Uri.parse('$kApiBaseUrl/help-desk/tickets');
     final req = http.MultipartRequest('POST', uri);
     req.headers['Authorization'] = 'Bearer $token';
+    // Do not set Content-Type — MultipartRequest sets multipart boundary.
     req.fields['subject'] = subject.trim().isEmpty ? 'Support Request' : subject.trim();
     req.fields['description'] = description.trim();
 
-    for (final path in imagePaths.take(5)) {
-      req.files.add(await http.MultipartFile.fromPath('screenshots', path));
+    // React client sends exactly one file as field `screenshots`.
+    final path = imagePaths.isNotEmpty ? imagePaths.first.trim() : '';
+    if (path.isNotEmpty) {
+      req.files.add(await _screenshotPart(path));
     }
 
     http.StreamedResponse streamed;
@@ -45,20 +49,86 @@ class HelpDeskService {
       return const SubmitTicketResult(success: false, message: 'Session expired. Please log in again.', unauthorized: true);
     }
 
-    Map<String, dynamic>? data;
-    try {
-      data = jsonDecode(res.body) as Map<String, dynamic>?;
-    } catch (_) {
-      return const SubmitTicketResult(success: false, message: 'Invalid response from server');
+    return _parseSubmitResponse(res);
+  }
+
+  static String _basename(String path) {
+    final i = path.lastIndexOf(RegExp(r'[/\\]'));
+    return i >= 0 ? path.substring(i + 1) : path;
+  }
+
+  static MediaType? _guessImageMediaType(String path) {
+    final lower = path.toLowerCase();
+    if (lower.endsWith('.png')) return MediaType('image', 'png');
+    if (lower.endsWith('.gif')) return MediaType('image', 'gif');
+    if (lower.endsWith('.webp')) return MediaType('image', 'webp');
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
+      return MediaType('image', 'jpeg');
+    }
+    return null;
+  }
+
+  static Future<http.MultipartFile> _screenshotPart(String path) async {
+    final name = _basename(path);
+    final ct = _guessImageMediaType(path);
+    return http.MultipartFile.fromPath(
+      'screenshots',
+      path,
+      filename: name.isNotEmpty ? name : 'screenshot.jpg',
+      contentType: ct,
+    );
+  }
+
+  SubmitTicketResult _parseSubmitResponse(http.Response res) {
+    final raw = res.body.trim();
+
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      if (raw.isEmpty) {
+        return const SubmitTicketResult(
+          success: true,
+          message: 'Your request has been submitted. We will get back to you soon.',
+        );
+      }
+      try {
+        final data = jsonDecode(raw) as Map<String, dynamic>?;
+        if (data?['success'] == true) {
+          return SubmitTicketResult(
+            success: true,
+            message: data?['message']?.toString() ??
+                'Your request has been submitted. We will get back to you soon.',
+          );
+        }
+        return SubmitTicketResult(
+          success: false,
+          message: data?['message']?.toString() ?? 'Failed to submit. Please try again.',
+        );
+      } catch (_) {
+        // Some deployments return 200 with plain text or non-JSON.
+        return const SubmitTicketResult(
+          success: true,
+          message: 'Your request has been submitted. We will get back to you soon.',
+        );
+      }
     }
 
-    if (data?['success'] == true) {
-      return SubmitTicketResult(success: true, message: data?['message']?.toString());
+    if (raw.isEmpty) {
+      return SubmitTicketResult(
+        success: false,
+        message: 'Request failed (HTTP ${res.statusCode}). Please try again.',
+      );
     }
-    return SubmitTicketResult(
-      success: false,
-      message: data?['message']?.toString() ?? 'Failed to submit. Please try again.',
-    );
+    try {
+      final data = jsonDecode(raw) as Map<String, dynamic>?;
+      return SubmitTicketResult(
+        success: false,
+        message: data?['message']?.toString() ?? 'Failed to submit. Please try again.',
+      );
+    } catch (_) {
+      return SubmitTicketResult(
+        success: false,
+        message: 'Request failed (HTTP ${res.statusCode}). Please try again.',
+      );
+    }
   }
 
   Future<MyTicketsResult> fetchMyTickets() async {

@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
+import '../config/api_config.dart';
 import '../constants/remote_assets.dart';
 import '../game_bid/market_for_bid.dart';
 import '../services/markets_service.dart';
@@ -19,9 +22,12 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Timer? _every30s;
   Timer? _every60s;
+  Timer? _bannerTicker;
   String _lastIstDate = getTodayIst();
 
   List<Map<String, dynamic>> _rawMarkets = [];
+  List<String> _mobileBanners = const [];
+  int _activeBannerIndex = 0;
   bool _loading = true;
 
   @override
@@ -29,6 +35,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _fetchMarkets();
+    unawaited(_loadMobileBanners());
     _every30s = Timer.periodic(
       const Duration(seconds: 30),
       (_) => _fetchMarkets(),
@@ -49,6 +56,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _every30s?.cancel();
     _every60s?.cancel();
+    _bannerTicker?.cancel();
     super.dispose();
   }
 
@@ -74,6 +82,66 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       }
     } catch (_) {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  List<String> _parseMobileBanners(Map<String, dynamic>? body) {
+    if (body == null) return const [];
+    final candidates = <dynamic>[
+      body['mobileBanners'],
+      (body['data'] is Map)
+          ? (body['data'] as Map)['mobileBanners']
+          : null,
+      body['banners'],
+    ];
+    for (final c in candidates) {
+      if (c is! List) continue;
+      final out = <String>[];
+      for (final item in c) {
+        if (item is String) {
+          final s = item.trim();
+          if (s.isNotEmpty) out.add(s);
+          continue;
+        }
+        if (item is Map) {
+          final m = Map<String, dynamic>.from(item);
+          for (final key in ['url', 'imageUrl', 'image', 'src']) {
+            final s = m[key]?.toString().trim() ?? '';
+            if (s.isNotEmpty) {
+              out.add(s);
+              break;
+            }
+          }
+        }
+      }
+      if (out.isNotEmpty) return out;
+    }
+    return const [];
+  }
+
+  Future<void> _loadMobileBanners() async {
+    try {
+      final res = await http.get(Uri.parse('$kApiBaseUrl/banner-settings'));
+      final body = jsonDecode(res.body) as Map<String, dynamic>?;
+      if (!mounted || res.statusCode < 200 || res.statusCode >= 300) return;
+      final banners = _parseMobileBanners(body);
+      if (banners.isEmpty) return;
+      setState(() {
+        _mobileBanners = banners;
+        _activeBannerIndex = 0;
+      });
+      _bannerTicker?.cancel();
+      if (banners.length > 1) {
+        _bannerTicker = Timer.periodic(const Duration(seconds: 5), (_) {
+          if (!mounted || _mobileBanners.length < 2) return;
+          setState(() {
+            _activeBannerIndex =
+                (_activeBannerIndex + 1) % _mobileBanners.length;
+          });
+        });
+      }
+    } catch (_) {
+      // keep fallback banner assets
     }
   }
 
@@ -169,10 +237,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     return CustomScrollView(
       slivers: [
-        SliverToBoxAdapter(child: _HeroSection(wide: wide)),
         SliverToBoxAdapter(
-          child: _TopWinnersBanner(
-            onTap: () => navigateMainRoute(context, '/top-winners'),
+          child: _HeroSection(
+            wide: wide,
+            imageUrl: _mobileBanners.isNotEmpty
+                ? _mobileBanners[_activeBannerIndex]
+                : null,
           ),
         ),
         SliverToBoxAdapter(
@@ -247,96 +317,41 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 }
 
 class _HeroSection extends StatelessWidget {
-  const _HeroSection({required this.wide});
+  const _HeroSection({
+    required this.wide,
+    this.imageUrl,
+  });
 
   final bool wide;
+  final String? imageUrl;
 
   @override
   Widget build(BuildContext context) {
+    final fallback = wide ? RemoteAssets.heroDesktop : RemoteAssets.heroMobile;
+    final url = (imageUrl?.trim().isNotEmpty ?? false)
+        ? imageUrl!.trim()
+        : fallback;
+    final image = AnimatedSwitcher(
+      duration: const Duration(milliseconds: 700),
+      switchInCurve: Curves.easeOutCubic,
+      switchOutCurve: Curves.easeInCubic,
+      child: Image.network(
+        url,
+        key: ValueKey(url),
+        fit: wide ? BoxFit.cover : BoxFit.contain,
+        width: double.infinity,
+        errorBuilder: (_, _, _) => wide
+            ? Container(color: Colors.grey.shade800)
+            : const SizedBox(height: 10),
+      ),
+    );
     if (wide) {
       return AspectRatio(
         aspectRatio: 1920 / 500,
-        child: Image.network(
-          RemoteAssets.heroDesktop,
-          fit: BoxFit.cover,
-          width: double.infinity,
-          errorBuilder: (_, _, _) => Container(color: Colors.grey.shade800),
-        ),
+        child: image,
       );
     }
-    return Image.network(
-      RemoteAssets.heroMobile,
-      width: double.infinity,
-      fit: BoxFit.contain,
-      errorBuilder: (_, _, _) => const SizedBox(height: 10),
-    );
-  }
-}
-
-class _TopWinnersBanner extends StatelessWidget {
-  const _TopWinnersBanner({required this.onTap});
-
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 16, 12, 12),
-      child: Container(
-        padding: const EdgeInsets.all(1.6),
-        decoration: BoxDecoration(
-          gradient: AppColors.neonGlowGradient,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Material(
-          borderRadius: BorderRadius.circular(16),
-          clipBehavior: Clip.antiAlias,
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: onTap,
-            splashColor: Colors.white.withValues(alpha: 0.06),
-            child: Container(
-              decoration: BoxDecoration(
-                gradient: AppColors.cardBackgroundGradient,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.emoji_events_rounded,
-                    color: AppColors.neonGreen,
-                    size: 28,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      'Top Winners',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w800,
-                        fontSize: 15,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
-                  Text(
-                    'View leaderboard',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: AppColors.neonGreen.withValues(alpha: 0.65),
-                    ),
-                  ),
-                  Icon(
-                    Icons.chevron_right,
-                    color: AppColors.neonGreen.withValues(alpha: 0.65),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
+    return image;
   }
 }
 
@@ -446,7 +461,7 @@ class _HomeQuickActionButtons extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
       child: Row(
         children: [
           Expanded(

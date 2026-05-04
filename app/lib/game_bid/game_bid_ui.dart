@@ -8,6 +8,14 @@ import '../theme/casino_ui.dart';
 
 /// Shared “casino” styling for all game / bid flows (matches funds & shell).
 abstract final class GameBidUi {
+  static const Map<String, String> quickPointsCoinAssets = {
+    '10': 'assets/images/10RS.png',
+    '20': 'assets/images/20RS.png',
+    '30': 'assets/images/30RS.png',
+    '40': 'assets/images/40RS.png',
+    '50': 'assets/images/50RS.png',
+  };
+
   static TextStyle get sectionLabel => TextStyle(
         fontSize: 12,
         fontWeight: FontWeight.w600,
@@ -534,6 +542,7 @@ class _QuickPointsChipTile extends StatelessWidget {
       width: 1,
     );
     final s = extent ?? GameBidUi.betChipSize;
+    final coinAsset = GameBidUi.quickPointsCoinAssets[label];
     return Theme(
       data: Theme.of(context).copyWith(
         splashColor: Colors.transparent,
@@ -567,7 +576,19 @@ class _QuickPointsChipTile extends StatelessWidget {
             ),
           ),
           child: Center(
-            child: Text(label, style: GameBidUi.quickPointsLabelStyle, textAlign: TextAlign.center),
+            child: coinAsset != null
+                ? Image.asset(
+                    coinAsset,
+                    width: s * 0.78,
+                    height: s * 0.78,
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, _, _) => Text(
+                      label,
+                      style: GameBidUi.quickPointsLabelStyle,
+                      textAlign: TextAlign.center,
+                    ),
+                  )
+                : Text(label, style: GameBidUi.quickPointsLabelStyle, textAlign: TextAlign.center),
           ),
         ),
       ),

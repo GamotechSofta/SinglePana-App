@@ -76,21 +76,31 @@ class AuthService {
     required String password,
   }) async {
     final deviceId = await DeviceIdService.instance.getOrCreate();
-    final uri = Uri.parse('$kApiBaseUrl/users/register');
-    final response = await http.post(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'phone': phone,
-        'password': password,
-        'deviceId': deviceId,
-      }),
-    );
-
-    return _parseAuthResponse(response);
+    const paths = ['/users/register', '/users/signup', '/users/create'];
+    AuthResult? fallback;
+    for (final path in paths) {
+      final uri = Uri.parse('$kApiBaseUrl$path');
+      final response = await http.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'phone': phone,
+          'password': password,
+          'deviceId': deviceId,
+        }),
+      );
+      final parsed = _parseAuthResponse(response, requireUserData: false);
+      if (parsed.ok) return parsed;
+      fallback ??= parsed;
+      if (response.statusCode == 409) return parsed;
+    }
+    return fallback ?? const AuthResult(ok: false, message: 'Signup failed');
   }
 
-  AuthResult _parseAuthResponse(http.Response response) {
+  AuthResult _parseAuthResponse(
+    http.Response response, {
+    bool requireUserData = true,
+  }) {
     Map<String, dynamic>? data;
     try {
       data = jsonDecode(response.body) as Map<String, dynamic>?;
@@ -101,13 +111,30 @@ class AuthService {
       );
     }
 
-    final success = data?['success'] == true;
-    final message = data?['message']?.toString() ?? 'Something went wrong';
+    final statusOk = response.statusCode >= 200 && response.statusCode < 300;
+    final success =
+        data?['success'] == true ||
+        data?['ok'] == true ||
+        (statusOk && data?['success'] != false);
+    final message =
+        data?['message']?.toString() ??
+        data?['error']?.toString() ??
+        data?['msg']?.toString() ??
+        (statusOk ? 'Success' : 'Something went wrong');
     if (!success) {
       return AuthResult(ok: false, message: message);
     }
 
     final inner = data?['data'];
+    if (!requireUserData) {
+      final user = inner is Map<String, dynamic>
+          ? inner
+          : data?['user'] is Map<String, dynamic>
+              ? (data!['user'] as Map<String, dynamic>)
+              : null;
+      return AuthResult(ok: true, message: message, user: user);
+    }
+
     if (inner is! Map<String, dynamic>) {
       return AuthResult(ok: false, message: 'Invalid response from server.');
     }

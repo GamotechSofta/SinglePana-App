@@ -17,8 +17,9 @@ class SupportNewPage extends StatefulWidget {
 }
 
 class _SupportNewPageState extends State<SupportNewPage> {
-  final _subjectCtrl = TextEditingController(text: 'Support Request');
+  final _subjectCtrl = TextEditingController();
   final _descCtrl = TextEditingController();
+  final _subjectFocus = FocusNode();
   List<XFile> _images = [];
   bool _loading = false;
   String? _feedback;
@@ -35,6 +36,7 @@ class _SupportNewPageState extends State<SupportNewPage> {
   void dispose() {
     _subjectCtrl.dispose();
     _descCtrl.dispose();
+    _subjectFocus.dispose();
     super.dispose();
   }
 
@@ -48,24 +50,21 @@ class _SupportNewPageState extends State<SupportNewPage> {
       _user!['token'] != null &&
       _user!['token'].toString().isNotEmpty;
 
-  Future<void> _pickImages() async {
-    final remain = 5 - _images.length;
-    if (remain <= 0) return;
-    final list = await ImagePicker().pickMultiImage(
+  /// Matches React: exactly one image, field name `screenshots` on API.
+  Future<void> _pickScreenshot() async {
+    final file = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
       imageQuality: 85,
-      limit: remain,
     );
-    if (list.isEmpty || !mounted) return;
+    if (file == null || !mounted) return;
     setState(() {
-      _images = [..._images, ...list].take(5).toList();
+      _images = [file];
       _feedback = null;
     });
   }
 
-  void _removeAt(int i) {
-    setState(() {
-      _images = List.from(_images)..removeAt(i);
-    });
+  void _removeScreenshot() {
+    setState(() => _images = []);
   }
 
   Future<void> _submit() async {
@@ -79,6 +78,13 @@ class _SupportNewPageState extends State<SupportNewPage> {
     if (_descCtrl.text.trim().isEmpty) {
       setState(() {
         _feedback = 'Please describe your problem.';
+        _feedbackOk = false;
+      });
+      return;
+    }
+    if (_images.isEmpty) {
+      setState(() {
+        _feedback = 'Please upload 1 screenshot (required).';
         _feedbackOk = false;
       });
       return;
@@ -140,7 +146,7 @@ class _SupportNewPageState extends State<SupportNewPage> {
         Padding(
           padding: const EdgeInsets.only(left: 8, bottom: 16),
           child: Text(
-            'Describe your problem and attach screenshots if needed.',
+            'Describe your problem and attach one screenshot (required).',
             style: TextStyle(color: CasinoUi.mutedGold(0.78), fontSize: 13),
           ),
         ),
@@ -184,11 +190,17 @@ class _SupportNewPageState extends State<SupportNewPage> {
                   children: [
                     TextField(
                       controller: _subjectCtrl,
+                      focusNode: _subjectFocus,
                       enabled: _hasUser,
                       style: const TextStyle(color: CasinoUi.lightGold, fontSize: 14, height: 1.2),
                       decoration: const InputDecoration(
                         labelText: 'Subject',
                         hintText: 'e.g. Payment issue, Game error',
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 12,
+                        ),
+                        isDense: false,
                       ),
                     ),
                     const SizedBox(height: 10),
@@ -201,11 +213,13 @@ class _SupportNewPageState extends State<SupportNewPage> {
                         labelText: 'Describe your problem *',
                         hintText: 'Explain your issue in detail...',
                         alignLabelWithHint: true,
+                        contentPadding: EdgeInsets.fromLTRB(14, 16, 14, 16),
+                        isDense: false,
                       ),
                     ),
                     const SizedBox(height: 10),
                     Text(
-                      'Screenshots (optional, max 5 images)',
+                      'Screenshot (required — 1 image only)',
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
@@ -214,14 +228,12 @@ class _SupportNewPageState extends State<SupportNewPage> {
                     ),
                     const SizedBox(height: 8),
                     OutlinedButton.icon(
-                      onPressed: (!_hasUser || _images.length >= 5)
-                          ? null
-                          : _pickImages,
+                      onPressed: !_hasUser ? null : _pickScreenshot,
                       icon: const Icon(Icons.photo_library_outlined),
                       label: Text(
                         _images.isEmpty
-                            ? 'Choose images'
-                            : 'Add more (${_images.length}/5)',
+                            ? 'Choose image'
+                            : 'Change image',
                       ),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: CasinoUi.lightGold,
@@ -239,18 +251,15 @@ class _SupportNewPageState extends State<SupportNewPage> {
                     ),
                     if (_images.isNotEmpty) ...[
                       const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: List.generate(_images.length, (i) {
-                          return Chip(
-                            label: Text(
-                              'Image ${i + 1}',
-                              style: const TextStyle(fontSize: 12),
-                            ),
-                            onDeleted: () => _removeAt(i),
-                          );
-                        }),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Chip(
+                          label: Text(
+                            _images.first.name,
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          onDeleted: _removeScreenshot,
+                        ),
                       ),
                     ],
                     if (_feedback != null) ...[

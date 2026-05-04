@@ -113,10 +113,13 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
   final List<_BetEntry> _bets = [];
   final List<_TicketEntry> _tickets = [];
   List<String> _selectedAdvanceSlots = const [];
+  final TransformationController _zoomController = TransformationController();
+  bool _isZoomedIn = false;
 
   @override
   void initState() {
     super.initState();
+    _zoomController.addListener(_handleZoomTransformChanged);
     unawaited(_bootstrap3D());
   }
 
@@ -143,10 +146,18 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
   void dispose() {
     _clockTicker?.cancel();
     _slotTicker?.cancel();
+    _zoomController.removeListener(_handleZoomTransformChanged);
+    _zoomController.dispose();
     if (!_keepLandscapeOnExit) {
       unawaited(_restorePortraitOrientation());
     }
     super.dispose();
+  }
+
+  void _handleZoomTransformChanged() {
+    final zoomed = _zoomController.value.getMaxScaleOnAxis() > 1.01;
+    if (!mounted || zoomed == _isZoomedIn) return;
+    setState(() => _isZoomedIn = zoomed);
   }
 
   Future<void> _configureOrientationForLottery() async {
@@ -1038,14 +1049,23 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
       ),
         child: DefaultTextStyle(
           style: const TextStyle(fontSize: 10),
-          child: Container(
-            color: const Color(0xFF0B1223),
-            child: SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.all(2),
-                child: _booting
-                    ? const _ThreeDLoadingView()
-                    : Container(
+          child: Stack(
+            children: [
+              InteractiveViewer(
+                transformationController: _zoomController,
+                minScale: 1,
+                maxScale: 2.5,
+                panEnabled: true,
+                scaleEnabled: true,
+                clipBehavior: Clip.hardEdge,
+                child: Container(
+                  color: const Color(0xFF0B1223),
+                  child: SafeArea(
+                    child: Padding(
+                      padding: const EdgeInsets.all(2),
+                      child: _booting
+                          ? const _ThreeDLoadingView()
+                          : Container(
                       decoration: BoxDecoration(
                         color: const Color(0xFFF3F4F6),
                         border: Border.all(color: const Color(0xFFCBD5E1)),
@@ -1097,9 +1117,30 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
                           ),
                         ],
                       ),
+                          ),
                     ),
+                  ),
+                ),
               ),
-            ),
+              if (_isZoomedIn)
+                Positioned(
+                  right: 12,
+                  bottom: 12,
+                  child: ElevatedButton.icon(
+                    onPressed: () => _zoomController.value = Matrix4.identity(),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xAA000000),
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        side: const BorderSide(color: Color(0xFF4C4C4C)),
+                      ),
+                    ),
+                    icon: const Icon(Icons.center_focus_strong, size: 14),
+                    label: const Text('Reset Zoom'),
+                  ),
+                ),
+            ],
           ),
         ),
       ),

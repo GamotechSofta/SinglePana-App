@@ -28,6 +28,7 @@ class _LotteryPageState extends State<LotteryPage> {
   Timer? _slotTicker;
   DateTime _now = DateTime.now();
   double _marqueeOffset = 0;
+  String _lotteryNews = 'Welcome Diamond';
 
   int _activeQuiz = 1;
   bool _multi = false;
@@ -50,14 +51,18 @@ class _LotteryPageState extends State<LotteryPage> {
   Map<int, int?> _lastSlotByQuiz = {};
   String _previousSlotTimeLabel = '';
   List<String> _selectedAdvanceSlots = const [];
+  final TransformationController _zoomController = TransformationController();
+  bool _isZoomedIn = false;
 
   @override
   void initState() {
     super.initState();
+    _zoomController.addListener(_handleZoomTransformChanged);
     unawaited(_configureOrientationForLottery());
     unawaited(_loadWalletBalance());
     unawaited(_syncQuizSlot());
     unawaited(_syncLastSlotResult());
+    unawaited(_loadLotteryNews());
     _slotTicker = Timer.periodic(const Duration(seconds: 4), (_) {
       unawaited(_syncQuizSlot());
       unawaited(_syncLastSlotResult());
@@ -80,7 +85,15 @@ class _LotteryPageState extends State<LotteryPage> {
     _clockTicker?.cancel();
     _marqueeTicker?.cancel();
     _slotTicker?.cancel();
+    _zoomController.removeListener(_handleZoomTransformChanged);
+    _zoomController.dispose();
     super.dispose();
+  }
+
+  void _handleZoomTransformChanged() {
+    final zoomed = _zoomController.value.getMaxScaleOnAxis() > 1.01;
+    if (zoomed == _isZoomedIn || !mounted) return;
+    setState(() => _isZoomedIn = zoomed);
   }
 
   Future<void> _configureOrientationForLottery() async {
@@ -226,6 +239,49 @@ class _LotteryPageState extends State<LotteryPage> {
         _lastSlotByQuiz = {};
         _previousSlotTimeLabel = '';
       });
+    }
+  }
+
+  String _extractLotteryNews(Map<String, dynamic>? body) {
+    if (body == null) return '';
+    final data = body['data'];
+    if (data is String && data.trim().isNotEmpty) return data.trim();
+    if (data is Map) {
+      final map = Map<String, dynamic>.from(data);
+      for (final key in [
+        'lotteryNews',
+        'lottery_news',
+        'news',
+        'message',
+        'text',
+        'title',
+        'content',
+      ]) {
+        final v = map[key]?.toString().trim() ?? '';
+        if (v.isNotEmpty) return v;
+      }
+    }
+    for (final key in ['lotteryNews', 'lottery_news', 'message', 'news']) {
+      final v = body[key]?.toString().trim() ?? '';
+      if (v.isNotEmpty) return v;
+    }
+    return '';
+  }
+
+  Future<void> _loadLotteryNews() async {
+    try {
+      final uri = Uri.parse('$kApiBaseUrl/banner-settings/lottery-news');
+      final res = await http.get(uri);
+      final body = jsonDecode(res.body) as Map<String, dynamic>?;
+      if (!mounted) return;
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        final text = _extractLotteryNews(body);
+        if (text.isNotEmpty) {
+          setState(() => _lotteryNews = text);
+        }
+      }
+    } catch (_) {
+      // keep fallback text if API fails
     }
   }
 
@@ -1001,110 +1057,145 @@ class _LotteryPageState extends State<LotteryPage> {
         child: LayoutBuilder(
           builder: (context, constraints) {
             return ClipRect(
-              child: SizedBox.expand(
-                child: FittedBox(
-                  fit: BoxFit.fill,
-                  alignment: Alignment.center,
-                  child: SizedBox(
-                    width: _baseWidth,
-                    height: _baseHeight,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF111111),
-                        border: Border.all(color: const Color(0xFF4C4C4C)),
-                      ),
-                      child: Column(
-                        children: [
-                          _TopHeader(
-                            dateText: nowDate,
-                            drawTimeText: drawTime,
-                            currentDateText: nowDate,
-                            currentTimeText: nowTime,
-                            walletBalance: _walletBalance,
-                            onOpenQuiz: () => unawaited(
-                              Navigator.of(context).pushNamed('/lottery/quiz'),
+              child: Stack(
+                children: [
+                  InteractiveViewer(
+                    transformationController: _zoomController,
+                    minScale: 1,
+                    maxScale: 2.5,
+                    panEnabled: true,
+                    scaleEnabled: true,
+                    clipBehavior: Clip.hardEdge,
+                    child: SizedBox.expand(
+                      child: FittedBox(
+                        fit: BoxFit.fill,
+                        alignment: Alignment.center,
+                        child: SizedBox(
+                          width: _baseWidth,
+                          height: _baseHeight,
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF111111),
+                              border: Border.all(color: const Color(0xFF4C4C4C)),
                             ),
-                            onOpenThreeD: () => unawaited(_openThreeD()),
-                            onOpenMyBets: () => unawaited(_openMyBets2D()),
-                            onBack: _exitLottery,
-                          ),
-                          _QuizSelector(
-                            activeQuiz: _activeQuiz,
-                            selectedQuizzes: _selectedQuizzes,
-                            multi: _multi,
-                            lastDrawByQuiz: _lastSlotByQuiz,
-                            previousSlotTimeLabel: _previousSlotTimeLabel,
-                            onToggleQuiz: _handleQuizToggle,
-                            onToggleMulti: _handleMultiToggle,
-                            onToggleAll: _handleAllToggle,
-                            isSetChecked: _isSetChecked,
-                            onToggleSet: _handleSetToggle,
-                            onOpenResult: () => unawaited(Navigator.of(context).pushNamed('/lottery/old-results')),
-                          ),
-                          _StatusStrip(offset: _marqueeOffset),
-                          Expanded(
-                            child: Row(
+                            child: Column(
                               children: [
+                                _TopHeader(
+                                  dateText: nowDate,
+                                  drawTimeText: drawTime,
+                                  currentDateText: nowDate,
+                                  currentTimeText: nowTime,
+                                  walletBalance: _walletBalance,
+                                  onOpenQuiz: () => unawaited(
+                                    Navigator.of(context).pushNamed('/lottery/quiz'),
+                                  ),
+                                  onOpenThreeD: () => unawaited(_openThreeD()),
+                                  onOpenMyBets: () => unawaited(_openMyBets2D()),
+                                  onBack: _exitLottery,
+                                ),
+                                _QuizSelector(
+                                  activeQuiz: _activeQuiz,
+                                  selectedQuizzes: _selectedQuizzes,
+                                  multi: _multi,
+                                  lastDrawByQuiz: _lastSlotByQuiz,
+                                  previousSlotTimeLabel: _previousSlotTimeLabel,
+                                  onToggleQuiz: _handleQuizToggle,
+                                  onToggleMulti: _handleMultiToggle,
+                                  onToggleAll: _handleAllToggle,
+                                  isSetChecked: _isSetChecked,
+                                  onToggleSet: _handleSetToggle,
+                                  onOpenResult: () => unawaited(Navigator.of(context).pushNamed('/lottery/old-results')),
+                                ),
+                                _StatusStrip(
+                                  offset: _marqueeOffset,
+                                  message: _lotteryNews,
+                                ),
                                 Expanded(
-                                  child: _NumberBoard(
-                                    activeQuiz: _activeQuiz,
-                                    selectedMap: _selectedMap,
-                                    activeTarget: _pendingTarget,
-                                    amountDraft: _amountDraft,
-                                    activeFilter: _activeFilter,
-                                    rowPointDisplay: _rowPointDisplay,
-                                    colPointDisplay: _colPointDisplay,
-                                    onSelectTarget: (target) =>
-                                        setState(() => _selectTarget(target)),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: _NumberBoard(
+                                          activeQuiz: _activeQuiz,
+                                          selectedMap: _selectedMap,
+                                          activeTarget: _pendingTarget,
+                                          amountDraft: _amountDraft,
+                                          activeFilter: _activeFilter,
+                                          rowPointDisplay: _rowPointDisplay,
+                                          colPointDisplay: _colPointDisplay,
+                                          onSelectTarget: (target) =>
+                                              setState(() => _selectTarget(target)),
+                                        ),
+                                      ),
+                                      _SummaryPanel(
+                                        totalAmount: _totalAmount,
+                                        totals: _setTotals,
+                                        onBuy: () => unawaited(_handleBoardBuy()),
+                                        buyDisabled: buyDisabled,
+                                      ),
+                                      _ControlPanel(
+                                        timerText: _formatTimer(_timerSeconds),
+                                        amountDraft: (_amountDraft.isEmpty
+                                            ? '0'
+                                            : _amountDraft),
+                                        activeFilter: _activeFilter,
+                                        onAdvanceDraw: _handleAdvanceDraw,
+                                        onResetAll: _handleResetAll,
+                                        onApplyFilter: (f) => setState(() {
+                                          _activeFilter = f;
+                                          if (_pendingTarget?.type ==
+                                                  _TargetType.cell &&
+                                              !_isVisible(_pendingTarget!.index)) {
+                                            _pendingTarget = null;
+                                            _amountDraft = '';
+                                            _enteredAmount = 0;
+                                          }
+                                        }),
+                                        onIncrease: () => _setAmountFromNumber(
+                                          (int.tryParse(_amountDraft) ??
+                                                  _enteredAmount) +
+                                              1,
+                                        ),
+                                        onDecrease: () => _setAmountFromNumber(
+                                          ((int.tryParse(_amountDraft) ??
+                                                      _enteredAmount) -
+                                                  1)
+                                              .clamp(1, 9999),
+                                        ),
+                                        onKeypad: _handleKeypad,
+                                        onEnterAmount: () =>
+                                            setState(_handleEnterAmount),
+                                      ),
+                                    ],
                                   ),
-                                ),
-                                _SummaryPanel(
-                                  totalAmount: _totalAmount,
-                                  totals: _setTotals,
-                                  onBuy: () => unawaited(_handleBoardBuy()),
-                                  buyDisabled: buyDisabled,
-                                ),
-                                _ControlPanel(
-                                  timerText: _formatTimer(_timerSeconds),
-                                  amountDraft: (_amountDraft.isEmpty
-                                      ? '0'
-                                      : _amountDraft),
-                                  activeFilter: _activeFilter,
-                                  onAdvanceDraw: _handleAdvanceDraw,
-                                  onResetAll: _handleResetAll,
-                                  onApplyFilter: (f) => setState(() {
-                                    _activeFilter = f;
-                                    if (_pendingTarget?.type ==
-                                            _TargetType.cell &&
-                                        !_isVisible(_pendingTarget!.index)) {
-                                      _pendingTarget = null;
-                                      _amountDraft = '';
-                                      _enteredAmount = 0;
-                                    }
-                                  }),
-                                  onIncrease: () => _setAmountFromNumber(
-                                    (int.tryParse(_amountDraft) ??
-                                            _enteredAmount) +
-                                        1,
-                                  ),
-                                  onDecrease: () => _setAmountFromNumber(
-                                    ((int.tryParse(_amountDraft) ??
-                                                _enteredAmount) -
-                                            1)
-                                        .clamp(1, 9999),
-                                  ),
-                                  onKeypad: _handleKeypad,
-                                  onEnterAmount: () =>
-                                      setState(_handleEnterAmount),
                                 ),
                               ],
                             ),
                           ),
-                        ],
+                        ),
                       ),
                     ),
                   ),
-                ),
+                  if (_isZoomedIn)
+                    Positioned(
+                      right: 12,
+                      bottom: 12,
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          _zoomController.value = Matrix4.identity();
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xAA000000),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            side: const BorderSide(color: Color(0xFF4C4C4C)),
+                          ),
+                        ),
+                        icon: const Icon(Icons.center_focus_strong, size: 16),
+                        label: const Text('Reset Zoom'),
+                      ),
+                    ),
+                ],
               ),
             );
           },
@@ -1710,13 +1801,18 @@ class _QuizRightAction extends StatelessWidget {
 }
 
 class _StatusStrip extends StatelessWidget {
-  const _StatusStrip({required this.offset});
+  const _StatusStrip({
+    required this.offset,
+    required this.message,
+  });
 
   final double offset;
+  final String message;
 
   @override
   Widget build(BuildContext context) {
-    final marqueeText = List.filled(10, 'Welcome Diamond').join('        ');
+    final base = message.trim().isEmpty ? 'Welcome Diamond' : message.trim();
+    final marqueeText = List.filled(10, base).join('        ');
     return Container(
       height: 28,
       decoration: const BoxDecoration(

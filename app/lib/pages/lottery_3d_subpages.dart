@@ -1029,6 +1029,55 @@ class _Lottery3DHistoryViewState extends State<_Lottery3DHistoryView> {
     return {'Authorization': 'Bearer $token'};
   }
 
+  String _mongoString(dynamic v) {
+    if (v == null) return '';
+    if (v is Map) {
+      final oid = v[r'$oid'] ?? v['oid'];
+      if (oid != null) return '$oid'.trim();
+      return '';
+    }
+    final s = '$v'.trim();
+    return s == 'null' ? '' : s;
+  }
+
+  /// API `ticketId` only — not mongoose `_id` (avoids two different ids on screen).
+  String _rawApiTicketIdFromRow(Map<String, dynamic> row) {
+    for (final entry in row.entries) {
+      final norm = entry.key.replaceAll('_', '').toLowerCase();
+      if (norm != 'ticketid') continue;
+      final s = _mongoString(entry.value);
+      if (s.isNotEmpty) return s;
+    }
+    final nested = row['ticket'];
+    if (nested is Map) {
+      final m = Map<String, dynamic>.from(nested);
+      for (final entry in m.entries) {
+        final norm = entry.key.replaceAll('_', '').toLowerCase();
+        if (norm != 'ticketid') continue;
+        final s = _mongoString(entry.value);
+        if (s.isNotEmpty) return s;
+      }
+    }
+    return '';
+  }
+
+  /// Last 8 chars of API `ticketId`, uppercase only when `ticketId` is present.
+  String _apiTicketIdLastEightUpper(Map<String, dynamic> row) {
+    final fromApi = _rawApiTicketIdFromRow(row);
+    if (fromApi.isEmpty) return '';
+    final s = fromApi.length <= 8 ? fromApi : fromApi.substring(fromApi.length - 8);
+    return s.toUpperCase();
+  }
+
+  /// One ticket id per history card: first `ticketId` found among slot rows.
+  String _slotTicketIdsLine(List<Map<String, dynamic>> slotRows) {
+    for (final row in slotRows) {
+      final id = _apiTicketIdLastEightUpper(row);
+      if (id.isNotEmpty) return id;
+    }
+    return '--------';
+  }
+
   String _fmtDate(dynamic iso) {
     final s = (iso ?? '').toString().trim();
     if (s.isEmpty) return '-';
@@ -1210,7 +1259,7 @@ class _Lottery3DHistoryViewState extends State<_Lottery3DHistoryView> {
           'createdAt': createdAt,
           'drawDate': drawDate,
           'drawTime': drawTime,
-          'gameId': slotStartIso,
+          'ticketIdDisplay': _slotTicketIdsLine(slotRows),
           'totalPoints': totalPoints,
           'totalWin': totalWin,
           'outcome': outcome,
@@ -1350,7 +1399,7 @@ class _Lottery3DHistoryViewState extends State<_Lottery3DHistoryView> {
                               final userName = '${row['userName'] ?? _playerName}';
                               final drawTime = '${row['drawTime'] ?? '-'}';
                               final drawDate = '${row['drawDate'] ?? '-'}';
-                              final gameId = '${row['gameId'] ?? '-'}';
+                              final ticketIdDisplay = '${row['ticketIdDisplay'] ?? '--------'}';
                               final totalPoints = '${row['totalPoints'] ?? 0}';
                               final totalWin = '${row['totalWin'] ?? 0}';
                               final outcome = '${row['outcome'] ?? 'loss'}'.toLowerCase();
@@ -1387,7 +1436,7 @@ class _Lottery3DHistoryViewState extends State<_Lottery3DHistoryView> {
                                           _HistoryLine(label: 'User Name', value: userName),
                                           _HistoryLine(label: 'Dr Time', value: drawTime),
                                           _HistoryLine(label: 'Dr Date', value: drawDate),
-                                          _HistoryLine(label: 'Game ID', value: gameId),
+                                          _HistoryLine(label: 'Ticket ID', value: ticketIdDisplay),
                                           _HistoryLine(label: 'Total Point', value: totalPoints),
                                           _HistoryLine(label: 'Total Win', value: totalWin),
                                         ],
@@ -1532,7 +1581,7 @@ class _Lottery3DHistoryViewState extends State<_Lottery3DHistoryView> {
                                   _TicketLine(label: 'Coupon Dr Date', value: '${ticket['drawDate'] ?? '-'}'),
                                   _TicketLine(label: 'Total Point', value: '${ticket['totalPoints'] ?? 0}'),
                                   _TicketLine(label: 'Win point', value: '${ticket['totalWin'] ?? 0}'),
-                                  _TicketLine(label: 'Game ID', value: '${ticket['gameId'] ?? '-'}'),
+                                  _TicketLine(label: 'Ticket ID', value: '${ticket['ticketIdDisplay'] ?? '--------'}'),
                                 ],
                               ),
                             ),

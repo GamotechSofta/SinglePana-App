@@ -40,10 +40,97 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
     return status.isEmpty ? '-' : status;
   }
 
+  /// Decodes Mongo-style fields that may be a string or `{ "$oid": "..." }`.
+  String _mongoString(dynamic v) {
+    if (v == null) return '';
+    if (v is Map && v[r'$oid'] != null) return '${v[r'$oid']}'.trim();
+    return '$v'.trim();
+  }
+
+  /// Last 8 characters of API `ticketId` (mongoose ObjectId string) — alphanumeric, unchanged.
+  /// Falls back to `_id` the same way if `ticketId` is absent.
+  String _ticketIdLastEight(Map<String, dynamic> row) {
+    final fromApi = _mongoString(row['ticketId']);
+    if (fromApi.isNotEmpty) {
+      final s = fromApi.length <= 8 ? fromApi : fromApi.substring(fromApi.length - 8);
+      return s.toUpperCase();
+    }
+    final fromDoc = _mongoString(row['_id']);
+    if (fromDoc.isNotEmpty) {
+      final s = fromDoc.length <= 8 ? fromDoc : fromDoc.substring(fromDoc.length - 8);
+      return s.toUpperCase();
+    }
+    return '--------';
+  }
+
+  /// Full ticket / document id for grouping (prefers API `ticketId`).
+  String _ticketBatchIdRaw(Map<String, dynamic> row) {
+    final fromApi = _mongoString(row['ticketId']);
+    if (fromApi.isNotEmpty) return fromApi;
+    final fromDoc = _mongoString(row['_id']);
+    if (fromDoc.isNotEmpty) return fromDoc;
+    return '';
+  }
+
+  String _groupHeaderTicketIdsLine(_QuizGroup group) {
+    final seen = <String>{};
+    final parts = <String>[];
+    for (final row in group.lines) {
+      final id = _ticketIdLastEight(row);
+      if (seen.add(id)) parts.add(id);
+    }
+    return 'Ticket ID: ${parts.join(', ')}';
+  }
+
+  /// Groups all lines that belong to the same ticket (same slot + batch id), across quiz numbers.
+  String _ticketBatchKey(Map<String, dynamic> row) {
+    const batchKeys = ['ticketId', 'ticketDisplayId', 'displayTicketId', 'displayId'];
+    for (final key in batchKeys) {
+      final raw = _mongoString(row[key]);
+      if (raw.isNotEmpty) return '$key|$raw';
+    }
+    final full = _ticketBatchIdRaw(row);
+    if (full.isNotEmpty) return 'id|$full';
+    return _ticketIdLastEight(row);
+  }
+
+  int _rowQuizId(Map<String, dynamic> row) => int.tryParse('${row['quizId'] ?? ''}') ?? 0;
+
+  String _quizLabelForRow(Map<String, dynamic> row) =>
+      'Q${_rowQuizId(row).toString().padLeft(2, '0')}';
+
+  String _sortedUniqueQuizHeader(_QuizGroup group) {
+    final ids = <int>{};
+    for (final row in group.lines) {
+      ids.add(_rowQuizId(row));
+    }
+    final list = ids.toList()..sort();
+    return list.map((q) => 'Q${q.toString().padLeft(2, '0')}').join(', ');
+  }
+
+  String? _headerWinningText(_QuizGroup group) {
+    if (!group.slotEnded) return null;
+    final wins = <String>{};
+    for (final row in group.lines) {
+      if (row['winningNumber'] != null) {
+        wins.add('${row['winningNumber']}'.padLeft(2, '0'));
+      }
+    }
+    if (wins.isNotEmpty) {
+      final list = wins.toList()..sort();
+      return list.join(', ');
+    }
+    return group.winningNumber;
+  }
+
   String _displayStatus(Map<String, dynamic> row, _QuizGroup group) {
-    if (group.slotEnded && group.winningNumber != null) {
+    final slotEnded = row['slotEnded'] == true || group.slotEnded;
+    final winning = row['winningNumber'] != null
+        ? '${row['winningNumber']}'.padLeft(2, '0')
+        : group.winningNumber;
+    if (slotEnded && winning != null) {
       final betNo = '${row['number'] ?? ''}'.padLeft(2, '0');
-      return betNo == group.winningNumber ? 'win' : 'lose';
+      return betNo == winning ? 'win' : 'lose';
     }
     final status = '${row['status'] ?? 'pending'}'.trim().toLowerCase();
     return status.isEmpty ? 'pending' : status;
@@ -53,8 +140,7 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
     final map = <String, _QuizGroup>{};
     for (final row in rows) {
       final slotStartIso = '${row['slotStartIso'] ?? ''}';
-      final quizId = int.tryParse('${row['quizId'] ?? ''}') ?? 0;
-      final k = '$slotStartIso|$quizId';
+      final k = '$slotStartIso|${_ticketBatchKey(row)}';
       final existing = map[k];
       if (existing == null) {
         final createdAt = DateTime.tryParse('${row['createdAt'] ?? ''}');
@@ -64,7 +150,6 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
             : false;
         map[k] = _QuizGroup(
           slotStartIso: slotStartIso,
-          quizId: quizId,
           drawLabelEnd: row['drawLabelEnd']?.toString(),
           slotEnded: row['slotEnded'] == true,
           winningNumber: row['winningNumber'] == null ? null : '${row['winningNumber']}'.padLeft(2, '0'),
@@ -73,6 +158,12 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
         );
       } else {
         existing.lines.add(row);
+        existing.slotEnded = existing.slotEnded || row['slotEnded'] == true;
+        if ((existing.drawLabelEnd == null || existing.drawLabelEnd!.isEmpty) &&
+            row['drawLabelEnd'] != null &&
+            '${row['drawLabelEnd']}'.trim().isNotEmpty) {
+          existing.drawLabelEnd = row['drawLabelEnd']?.toString();
+        }
       }
     }
     final groups = map.values.toList()
@@ -86,6 +177,8 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
       });
     for (final g in groups) {
       g.lines.sort((a, b) {
+        final cq = _rowQuizId(a).compareTo(_rowQuizId(b));
+        if (cq != 0) return cq;
         final an = int.tryParse('${a['number'] ?? ''}') ?? 0;
         final bn = int.tryParse('${b['number'] ?? ''}') ?? 0;
         return an.compareTo(bn);
@@ -279,6 +372,7 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
                                         itemCount: visibleGroups.length,
                                         itemBuilder: (context, index) {
                                           final group = visibleGroups[index];
+                                          final winningHdr = _headerWinningText(group);
                                           return Container(
                                             margin: const EdgeInsets.only(bottom: 10),
                                             decoration: BoxDecoration(
@@ -296,7 +390,7 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
                                                     runSpacing: 6,
                                                     children: [
                                                       Text(
-                                                        'QUIZ${group.quizId.toString().padLeft(2, '0')}',
+                                                        'Quiz: ${_sortedUniqueQuizHeader(group)}',
                                                         style: const TextStyle(
                                                           color: Color(0xFF1A4D6E),
                                                           fontSize: 11,
@@ -309,6 +403,15 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
                                                           color: Color(0xFF1A4D6E),
                                                           fontSize: 11,
                                                           fontWeight: FontWeight.w700,
+                                                        ),
+                                                      ),
+                                                      Text(
+                                                        _groupHeaderTicketIdsLine(group),
+                                                        style: const TextStyle(
+                                                          color: Color(0xFF1A4D6E),
+                                                          fontSize: 11,
+                                                          fontWeight: FontWeight.w700,
+                                                          letterSpacing: 0.4,
                                                         ),
                                                       ),
                                                       Container(
@@ -326,7 +429,7 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
                                                           ),
                                                         ),
                                                       ),
-                                                      if (group.slotEnded && group.winningNumber != null)
+                                                      if (winningHdr != null)
                                                         Container(
                                                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                                           decoration: BoxDecoration(
@@ -334,7 +437,7 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
                                                             borderRadius: BorderRadius.circular(6),
                                                           ),
                                                           child: Text(
-                                                            'Winning: ${group.winningNumber}',
+                                                            'Winning: $winningHdr',
                                                             style: const TextStyle(
                                                               color: Color(0xFF333333),
                                                               fontSize: 10,
@@ -426,7 +529,7 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
                                                                     cells: [
                                                                       DataCell(
                                                                         Text(
-                                                                          'Q${group.quizId.toString().padLeft(2, '0')}',
+                                                                          _quizLabelForRow(row),
                                                                           style: const TextStyle(color: Colors.black, fontSize: 10, fontWeight: FontWeight.w700),
                                                                         ),
                                                                       ),
@@ -501,7 +604,7 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
       builder: (ctx) => AlertDialog(
         title: const Text('Bet Detail'),
         content: Text(
-          'Quiz: Q${group.quizId.toString().padLeft(2, '0')}\n'
+          'Quiz: ${_quizLabelForRow(row)}\n'
           'Number: $number\n'
           'Amount: ₹$amount\n'
           'Draw: ${group.drawLabelEnd ?? '-'}\n'
@@ -543,7 +646,6 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
 class _QuizGroup {
   _QuizGroup({
     required this.slotStartIso,
-    required this.quizId,
     required this.drawLabelEnd,
     required this.slotEnded,
     required this.winningNumber,
@@ -552,9 +654,8 @@ class _QuizGroup {
   });
 
   final String slotStartIso;
-  final int quizId;
-  final String? drawLabelEnd;
-  final bool slotEnded;
+  String? drawLabelEnd;
+  bool slotEnded;
   final String? winningNumber;
   final bool isAdvanceDraw;
   final List<Map<String, dynamic>> lines;
