@@ -128,7 +128,12 @@ class _SpDpMotorStubScreenState extends State<SpDpMotorStubScreen> {
       return;
     }
     final pts = int.tryParse(_ptsCtrl.text.trim()) ?? 0;
-    final p = pts > 0 ? pts : 10;
+    if (pts <= 0) {
+      if (!silent) _toast('Enter points or select a quick point.');
+      if (silent && _rows.isNotEmpty) setState(() => _rows.clear());
+      return;
+    }
+    final p = pts;
     final sp = digits.length >= 3 ? generateSpMotorSinglePanas(digits) : <String>[];
     final dp = _generateDp(digits);
     final tp = widget.includeTripleCombinations
