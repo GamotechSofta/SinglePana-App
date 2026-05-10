@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 
 import '../config/api_config.dart';
 import 'lottery_2d_advance_page.dart';
+import 'lottery_2d_family_map.dart';
 import '../services/auth_service.dart';
 import '../services/wallet_service.dart';
 
@@ -723,6 +724,7 @@ class _LotteryPageState extends State<LotteryPage> {
   }
 
   bool _isVisible(int num) {
+    if (_activeFilter == 'fp') return true;
     if (_activeFilter == 'even') return num % 2 == 0;
     if (_activeFilter == 'odd') return num % 2 != 0;
     return true;
@@ -784,8 +786,26 @@ class _LotteryPageState extends State<LotteryPage> {
     setState(() {
       _appliedAmountByTarget.clear();
       if (checked) {
+        final keepFullSets = <int>{};
+        for (final range in const [
+          (1, 10),
+          (11, 20),
+          (21, 30),
+        ]) {
+          final s = range.$1;
+          final e = range.$2;
+          final full = List<int>.generate(e - s + 1, (i) => s + i).every(
+            _selectedQuizzes.contains,
+          );
+          if (full) {
+            for (var q = s; q <= e; q++) {
+              keepFullSets.add(q);
+            }
+          }
+        }
         _multi = true;
         _activeQuiz = start;
+        _selectedQuizzes = keepFullSets;
         for (var quizNo = start; quizNo <= end; quizNo++) {
           _selectedQuizzes.add(quizNo);
         }
@@ -819,10 +839,33 @@ class _LotteryPageState extends State<LotteryPage> {
     if (target == null) return '';
     final sorted = (_multi ? _selectedQuizzes.toList() : [_activeQuiz])..sort();
     final qKey = sorted.join(',');
+    if (target.type == _TargetType.family) {
+      final nums = target.familyNums?.toList() ?? <int>[];
+      nums.sort();
+      return '$qKey-family-${nums.join(',')}';
+    }
     return '$qKey-${target.type.name}-${target.index}';
   }
 
   void _selectTarget(_Target target) {
+    if (_activeFilter == 'fp') {
+      if (target.type == _TargetType.row || target.type == _TargetType.col) {
+        return;
+      }
+      if (target.type == _TargetType.cell) {
+        final resolved = _Target.family(Lottery2dFamilyMap.groupFor(target.index));
+        final currentKey = _targetKey(_pendingTarget);
+        final nextKey = _targetKey(resolved);
+        setState(() {
+          if (currentKey != nextKey) {
+            _enteredAmount = 0;
+            _amountDraft = '';
+          }
+          _pendingTarget = resolved;
+        });
+        return;
+      }
+    }
     final currentKey = _targetKey(_pendingTarget);
     final nextKey = _targetKey(target);
     setState(() {
@@ -837,7 +880,13 @@ class _LotteryPageState extends State<LotteryPage> {
   void _applyAmountToTarget(int amount, _Target? target) {
     final safe = amount;
     if (safe <= 0 || target == null) return;
-    if (target.type == _TargetType.cell && !_isVisible(target.index)) return;
+    if (target.type == _TargetType.family) {
+      final nums = target.familyNums;
+      if (nums == null || nums.isEmpty) return;
+      if (!nums.any(_isVisible)) return;
+    } else if (target.type == _TargetType.cell && !_isVisible(target.index)) {
+      return;
+    }
     if (target.type == _TargetType.col) {
       final hasVisible = List.generate(
         10,
@@ -855,7 +904,16 @@ class _LotteryPageState extends State<LotteryPage> {
     }
 
     final quizzes = _multi ? _selectedQuizzes.toList() : [_activeQuiz];
-    if (target.type == _TargetType.cell) {
+    if (target.type == _TargetType.family) {
+      final nums = target.familyNums!;
+      for (final q in quizzes) {
+        for (final num in nums) {
+          if (!_isVisible(num)) continue;
+          final key = _cellKey(q, num);
+          _selectedMap[key] = (_selectedMap[key] ?? 0) + delta;
+        }
+      }
+    } else if (target.type == _TargetType.cell) {
       for (final q in quizzes) {
         final key = _cellKey(q, target.index);
         _selectedMap[key] = (_selectedMap[key] ?? 0) + delta;
@@ -932,9 +990,11 @@ class _LotteryPageState extends State<LotteryPage> {
       _amountDraft = '';
       _enteredAmount = 0;
       _multi = false;
-      _selectedQuizzes = {_activeQuiz};
+      _activeQuiz = 1;
+      _selectedQuizzes = {1};
       _selectedAdvanceSlots = const [];
       _appliedAmountByTarget.clear();
+      _activeFilter = 'all';
       for (var i = 0; i < 10; i++) {
         _rowPointDisplay[i] = '';
         _colPointDisplay[i] = '';
@@ -1142,6 +1202,22 @@ class _LotteryPageState extends State<LotteryPage> {
                                         onResetAll: _handleResetAll,
                                         onApplyFilter: (f) => setState(() {
                                           _activeFilter = f;
+                                          if (_pendingTarget?.type ==
+                                                  _TargetType.family &&
+                                              f != 'fp') {
+                                            _pendingTarget = null;
+                                            _amountDraft = '';
+                                            _enteredAmount = 0;
+                                          }
+                                          if (f == 'fp' &&
+                                              (_pendingTarget?.type ==
+                                                      _TargetType.row ||
+                                                  _pendingTarget?.type ==
+                                                      _TargetType.col)) {
+                                            _pendingTarget = null;
+                                            _amountDraft = '';
+                                            _enteredAmount = 0;
+                                          }
                                           if (_pendingTarget?.type ==
                                                   _TargetType.cell &&
                                               !_isVisible(_pendingTarget!.index)) {
@@ -1869,6 +1945,7 @@ class _NumberBoard extends StatelessWidget {
   final ValueChanged<_Target> onSelectTarget;
 
   bool _isVisible(int num) {
+    if (activeFilter == 'fp') return true;
     if (activeFilter == 'even') return num % 2 == 0;
     if (activeFilter == 'odd') return num % 2 != 0;
     return true;
@@ -1876,6 +1953,7 @@ class _NumberBoard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final fpMode = activeFilter == 'fp';
     return Container(
       decoration: const BoxDecoration(
         color: Color(0xFFD7D7D7),
@@ -1919,7 +1997,7 @@ class _NumberBoard extends StatelessWidget {
                     : colPointDisplay[i];
                 Color border = const Color(0xFF3EA1DE);
                 Color bg = Colors.white;
-                if (!hasVisibleInCol) {
+                if (fpMode || !hasVisibleInCol) {
                   border = const Color(0xFFBDBDBD);
                   bg = const Color(0xFFE9E9E9);
                 } else if (selected) {
@@ -1932,7 +2010,7 @@ class _NumberBoard extends StatelessWidget {
                     child: SizedBox(
                       height: 34,
                       child: OutlinedButton(
-                        onPressed: hasVisibleInCol
+                        onPressed: !fpMode && hasVisibleInCol
                             ? () => onSelectTarget(_Target.col(i))
                             : null,
                         style: OutlinedButton.styleFrom(
@@ -1987,18 +2065,23 @@ class _NumberBoard extends StatelessWidget {
                               child: SizedBox(
                                 height: rowPickerHeight,
                                 child: OutlinedButton(
-                                  onPressed: () =>
-                                      onSelectTarget(_Target.row(row)),
+                                  onPressed: fpMode
+                                      ? null
+                                      : () => onSelectTarget(_Target.row(row)),
                                   style: OutlinedButton.styleFrom(
                                     side: BorderSide(
-                                      color: rowSelected
-                                          ? const Color(0xFF4ABA4F)
-                                          : const Color(0xFF3EA1DE),
+                                      color: fpMode
+                                          ? const Color(0xFFBDBDBD)
+                                          : rowSelected
+                                              ? const Color(0xFF4ABA4F)
+                                              : const Color(0xFF3EA1DE),
                                       width: 2,
                                     ),
-                                    backgroundColor: rowSelected
-                                        ? const Color(0xFFEFFFE8)
-                                        : Colors.white,
+                                    backgroundColor: fpMode
+                                        ? const Color(0xFFE9E9E9)
+                                        : rowSelected
+                                            ? const Color(0xFFEFFFE8)
+                                            : Colors.white,
                                     shape: const RoundedRectangleBorder(
                                       borderRadius: BorderRadius.zero,
                                     ),
@@ -2019,12 +2102,19 @@ class _NumberBoard extends StatelessWidget {
                               final visible = _isVisible(num);
                               final key = '$activeQuiz-$num';
                               final committedValue = selectedMap[key];
+                              final family = activeTarget?.familyNums;
+                              final inActiveFamily =
+                                  activeTarget?.type == _TargetType.family &&
+                                  family != null &&
+                                  family.contains(num);
                               final isActiveCell =
                                   activeTarget?.type == _TargetType.cell &&
                                   activeTarget?.index == num;
-                              final draftValue = isActiveCell && amountDraft.isNotEmpty
-                                  ? int.tryParse(amountDraft)
-                                  : null;
+                              final draftValue =
+                                  (isActiveCell || inActiveFamily) &&
+                                          amountDraft.isNotEmpty
+                                      ? int.tryParse(amountDraft)
+                                      : null;
                               final value = draftValue ?? committedValue;
                               final selected = value != null && value > 0;
                               final targetSelected =
@@ -2033,7 +2123,8 @@ class _NumberBoard extends StatelessWidget {
                                   (activeTarget?.type == _TargetType.row &&
                                       (num ~/ 10) == activeTarget?.index) ||
                                   (activeTarget?.type == _TargetType.col &&
-                                      (num % 10) == activeTarget?.index);
+                                      (num % 10) == activeTarget?.index) ||
+                                  inActiveFamily;
 
                               return Expanded(
                                 child: Padding(
@@ -2442,28 +2533,53 @@ class _ControlPanel extends StatelessWidget {
           _RedBigButton(label: 'RESET ALL', onTap: onResetAll),
           const SizedBox(height: 8),
           Container(
-            height: 48,
-            padding: const EdgeInsets.symmetric(horizontal: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
             decoration: BoxDecoration(
               color: Colors.black,
               border: Border.all(color: const Color(0xFF5D5D5D)),
             ),
-            child: Row(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _FilterOption(
-                  label: 'All',
-                  checked: activeFilter == 'all',
-                  onTap: () => onApplyFilter('all'),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Expanded(
+                      child: _FilterOption(
+                        label: 'All',
+                        checked: activeFilter == 'all',
+                        onTap: () => onApplyFilter('all'),
+                      ),
+                    ),
+                    Expanded(
+                      child: _FilterOption(
+                        label: 'FP',
+                        checked: activeFilter == 'fp',
+                        onTap: () => onApplyFilter('fp'),
+                      ),
+                    ),
+                  ],
                 ),
-                _FilterOption(
-                  label: 'Even',
-                  checked: activeFilter == 'even',
-                  onTap: () => onApplyFilter('even'),
-                ),
-                _FilterOption(
-                  label: 'Odd',
-                  checked: activeFilter == 'odd',
-                  onTap: () => onApplyFilter('odd'),
+                const SizedBox(height: 2),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Expanded(
+                      child: _FilterOption(
+                        label: 'Odd',
+                        checked: activeFilter == 'odd',
+                        onTap: () => onApplyFilter('odd'),
+                      ),
+                    ),
+                    Expanded(
+                      child: _FilterOption(
+                        label: 'Even',
+                        checked: activeFilter == 'even',
+                        onTap: () => onApplyFilter('even'),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -2688,37 +2804,39 @@ class _FilterOption extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Expanded(
-      child: InkWell(
-        onTap: onTap,
-        child: Center(
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Checkbox(
-                value: checked,
-                onChanged: (_) => onTap(),
-                activeColor: Colors.white,
-                checkColor: Colors.black,
-                side: const BorderSide(color: Colors.white),
-                visualDensity: const VisualDensity(
-                  horizontal: -4,
-                  vertical: -4,
-                ),
-                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Checkbox(
+              value: checked,
+              onChanged: (_) => onTap(),
+              activeColor: Colors.white,
+              checkColor: Colors.black,
+              side: const BorderSide(color: Colors.white),
+              visualDensity: const VisualDensity(
+                horizontal: -4,
+                vertical: -4,
               ),
-              const SizedBox(width: 4),
-              Text(
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            Expanded(
+              child: Text(
                 label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 15,
+                  fontSize: 13,
                   fontWeight: FontWeight.w600,
-                  height: 1,
+                  height: 1.15,
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -2801,15 +2919,39 @@ class _BetPreviewLine {
   final int amount;
 }
 
-enum _TargetType { cell, row, col }
+enum _TargetType { cell, row, col, family }
 
 class _Target {
-  const _Target(this.type, this.index);
+  const _Target.cell(int i)
+      : type = _TargetType.cell,
+        index = i,
+        familyNums = null;
 
-  const _Target.cell(int i) : this(_TargetType.cell, i);
-  const _Target.row(int i) : this(_TargetType.row, i);
-  const _Target.col(int i) : this(_TargetType.col, i);
+  const _Target.row(int i)
+      : type = _TargetType.row,
+        index = i,
+        familyNums = null;
+
+  const _Target.col(int i)
+      : type = _TargetType.col,
+        index = i,
+        familyNums = null;
+
+  factory _Target.family(Set<int> members) {
+    final copy = Set<int>.from(members);
+    final minIdx = _minIndex(copy);
+    return _Target._family(minIdx, Set.unmodifiable(copy));
+  }
+
+  _Target._family(this.index, this.familyNums)
+      : type = _TargetType.family;
 
   final _TargetType type;
   final int index;
+  final Set<int>? familyNums;
+
+  static int _minIndex(Set<int> members) {
+    if (members.isEmpty) return 0;
+    return members.reduce((a, b) => a < b ? a : b);
+  }
 }

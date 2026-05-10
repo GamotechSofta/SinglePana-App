@@ -656,7 +656,14 @@ class _QuizQuestionList3D extends StatefulWidget {
 }
 
 class _QuizQuestionList3DState extends State<_QuizQuestionList3D> {
-  final Set<int> _revealed = <int>{};
+  final Set<String> _revealedKeys = <String>{};
+  bool _orderAscending = true;
+
+  String _stableQuestionKey(Map<String, dynamic> q, int sourceIndex) {
+    final id = (q['id'] ?? q['_id']).toString().trim();
+    if (id.isNotEmpty) return 'id:$id';
+    return 'i:$sourceIndex';
+  }
 
   String _questionAnswer(Map<String, dynamic> q) {
     final raw = [
@@ -686,19 +693,52 @@ class _QuizQuestionList3DState extends State<_QuizQuestionList3D> {
         ),
       );
     }
+    final n = widget.questions.length;
+    final order = _orderAscending
+        ? List<int>.generate(n, (i) => i)
+        : List<int>.generate(n, (i) => n - 1 - i);
+    final qnPad = n > 99 ? 3 : 2;
     return Column(
       children: [
+        Align(
+          alignment: Alignment.centerRight,
+          child: Tooltip(
+            message: 'Reorder questions: ascending (1→N) or descending (N→1)',
+            child: TextButton.icon(
+              onPressed: () => setState(() => _orderAscending = !_orderAscending),
+              icon: Icon(
+                _orderAscending ? Icons.arrow_downward : Icons.arrow_upward,
+                size: 18,
+                color: const Color(0xFF1D4ED8),
+              ),
+              label: Text(
+                _orderAscending ? 'Ascending' : 'Descending',
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF1D4ED8),
+                ),
+              ),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+            ),
+          ),
+        ),
         Expanded(
           child: ListView.separated(
-            itemCount: widget.questions.length,
+            itemCount: n,
             separatorBuilder: (_, __) => const SizedBox(height: 6),
-            itemBuilder: (context, i) {
-              final q = widget.questions[i];
+            itemBuilder: (context, di) {
+              final src = order[di];
+              final q = widget.questions[src];
+              final revealKey = _stableQuestionKey(q, src);
               final options = q['options'] is Map
                   ? Map<String, dynamic>.from(q['options'] as Map)
                   : <String, dynamic>{};
               final answerText = _questionAnswer(q);
-              final isRevealed = _revealed.contains(i);
+              final isRevealed = _revealedKeys.contains(revealKey);
               return Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
@@ -714,7 +754,7 @@ class _QuizQuestionList3DState extends State<_QuizQuestionList3D> {
                       children: [
                         Expanded(
                           child: Text(
-                            'Q${(i + 1).toString().padLeft(2, '0')}: ${q['question'] ?? ''}',
+                            'Q${(src + 1).toString().padLeft(qnPad, '0')}: ${q['question'] ?? ''}',
                             style: const TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.w700,
@@ -727,9 +767,9 @@ class _QuizQuestionList3DState extends State<_QuizQuestionList3D> {
                           onPressed: () {
                             setState(() {
                               if (isRevealed) {
-                                _revealed.remove(i);
+                                _revealedKeys.remove(revealKey);
                               } else {
-                                _revealed.add(i);
+                                _revealedKeys.add(revealKey);
                               }
                             });
                           },

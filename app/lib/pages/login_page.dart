@@ -45,7 +45,35 @@ class _LoginPageState extends State<LoginPage> {
     super.dispose();
   }
 
-  Future<void> _submit() async {
+  /// Backend: "Login Pending. Device limit reached. Log out 1 device to continue."
+  bool _isDeviceLimitLoginMessage(String? message) {
+    if (message == null || message.isEmpty) return false;
+    final s = message.toLowerCase();
+    return s.contains('device limit') ||
+        (s.contains('login pending') && s.contains('log out'));
+  }
+
+  Future<void> _persistSessionAndGoHome(Map<String, dynamic> userFromResponse) async {
+    final previous = await AuthService.instance.getStoredUser();
+    String? previousCreatedAt;
+    if (previous != null) {
+      previousCreatedAt = previous['createdAt']?.toString() ??
+          previous['created_at']?.toString() ??
+          previous['createdOn']?.toString();
+    }
+    final merged = Map<String, dynamic>.from(userFromResponse);
+    merged['createdAt'] = merged['createdAt'] ??
+        merged['created_at'] ??
+        merged['createdOn'] ??
+        previousCreatedAt;
+    await AuthService.instance.saveUser(merged);
+    SessionCoordinator.instance.startHeartbeatIfLoggedIn();
+    if (!mounted) return;
+    Navigator.of(context).pushNamedAndRemoveUntil('/', (_) => false);
+  }
+
+  /// Calls `POST /users/logout-device`, then `POST /users/login` ([AuthService.login] with logoutOtherDevices).
+  Future<void> _submit({bool logoutOtherDevices = false}) async {
     setState(() => _error = null);
 
     if (!_isAbove18) {
@@ -59,27 +87,13 @@ class _LoginPageState extends State<LoginPage> {
       final result = await AuthService.instance.login(
         phone: _phone.text.trim(),
         password: _password.text,
+        logoutOtherDevices: logoutOtherDevices,
       );
 
       if (!mounted) return;
 
       if (result.ok && result.user != null) {
-        final previous = await AuthService.instance.getStoredUser();
-        String? previousCreatedAt;
-        if (previous != null) {
-          previousCreatedAt = previous['createdAt']?.toString() ??
-              previous['created_at']?.toString() ??
-              previous['createdOn']?.toString();
-        }
-        final merged = Map<String, dynamic>.from(result.user!);
-        merged['createdAt'] = merged['createdAt'] ??
-            merged['created_at'] ??
-            merged['createdOn'] ??
-            previousCreatedAt;
-        await AuthService.instance.saveUser(merged);
-        SessionCoordinator.instance.startHeartbeatIfLoggedIn();
-        if (!mounted) return;
-        Navigator.of(context).pushNamedAndRemoveUntil('/', (_) => false);
+        await _persistSessionAndGoHome(result.user!);
       } else {
         setState(() => _error = result.message);
       }
@@ -182,7 +196,6 @@ class _LoginPageState extends State<LoginPage> {
             textAlign: mobileStyle ? TextAlign.center : TextAlign.start,
           ),
           const SizedBox(height: 10),
-          if (_error != null) AuthErrorBanner(message: _error!, mobileStyle: mobileStyle),
           TextFormField(
             controller: _phone,
             keyboardType: TextInputType.phone,
@@ -240,13 +253,43 @@ class _LoginPageState extends State<LoginPage> {
             mobileStyle: mobileStyle,
           ),
           const SizedBox(height: 10),
+          if (_error != null) AuthErrorBanner(message: _error!, mobileStyle: mobileStyle),
+          if (_isDeviceLimitLoginMessage(_error)) ...[
+            Align(
+              alignment: mobileStyle ? Alignment.center : Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                onPressed: (_loading || !_isAbove18)
+                    ? null
+                    : () => _submit(logoutOtherDevices: true),
+                icon: Icon(
+                  Icons.phonelink_erase_outlined,
+                  size: 20,
+                  color: mobileStyle ? AppColors.neonGreen : AppColors.neonGreenDeep,
+                ),
+                label: Text(
+                  'Sign in here & log out other devices',
+                  style: TextStyle(
+                    color: mobileStyle ? AppColors.neonGreen : AppColors.neonGreenDeep,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(
+                    color: mobileStyle ? AppColors.neonGreen : AppColors.neonGreenDeep,
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           DecoratedBox(
             decoration: BoxDecoration(
               gradient: AppColors.ctaButtonGradient,
               borderRadius: BorderRadius.circular(12),
             ),
             child: FilledButton(
-              onPressed: (_loading || !_isAbove18) ? null : _submit,
+              onPressed: (_loading || !_isAbove18) ? null : () => _submit(),
               style: FilledButton.styleFrom(
                 backgroundColor: Colors.transparent,
                 foregroundColor: const Color(0xFF04140C),

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -70,15 +72,32 @@ class _AddFundTabState extends State<AddFundTab> {
   bool _submitting = false;
   String? _pickedPath;
   String _err = '';
+  Timer? _walletPoll;
+  /// Bumped after each `/wallet/balance` sync so [FutureBuilder] reloads displayed balance.
+  int _walletUiEpoch = 0;
+
+  static const _walletPollInterval = Duration(seconds: 12);
 
   @override
   void initState() {
     super.initState();
     _loadConfig();
+    unawaited(_syncDisplayedWalletFromServer());
+    _walletPoll = Timer.periodic(_walletPollInterval, (_) {
+      if (_submitting) return;
+      unawaited(_syncDisplayedWalletFromServer());
+    });
+  }
+
+  Future<void> _syncDisplayedWalletFromServer() async {
+    await WalletService.instance.refreshBalanceInStorage();
+    if (!mounted) return;
+    setState(() => _walletUiEpoch++);
   }
 
   @override
   void dispose() {
+    _walletPoll?.cancel();
     _amountCtrl.dispose();
     _utrCtrl.dispose();
     super.dispose();
@@ -176,6 +195,7 @@ class _AddFundTabState extends State<AddFundTab> {
     if (res.success) {
       await WalletService.instance.refreshBalanceInStorage();
       if (!mounted) return;
+      setState(() => _walletUiEpoch++);
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -229,6 +249,7 @@ class _AddFundTabState extends State<AddFundTab> {
 
   Widget _buildStep1() {
     return FutureBuilder<Map<String, dynamic>?>(
+      key: ValueKey<int>(_walletUiEpoch),
       future: AuthService.instance.getStoredUser(),
       builder: (context, snap) {
         final u = snap.data;
@@ -550,18 +571,36 @@ class _WithdrawFundTabState extends State<WithdrawFundTab> {
   bool _loading = true;
   bool _submitting = false;
   String _err = '';
+  Timer? _walletPoll;
+
+  static const _walletPollInterval = Duration(seconds: 12);
 
   @override
   void initState() {
     super.initState();
     _refresh();
+    _walletPoll = Timer.periodic(_walletPollInterval, (_) {
+      if (_submitting || _loading) return;
+      unawaited(_refreshWalletFigureOnly());
+    });
   }
 
   @override
   void dispose() {
+    _walletPoll?.cancel();
     _amountCtrl.dispose();
     _noteCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _refreshWalletFigureOnly() async {
+    await WalletService.instance.refreshBalanceInStorage();
+    final u = await AuthService.instance.getStoredUser();
+    if (!mounted) return;
+    final b = num.tryParse(u?['balance']?.toString() ?? '') ??
+        num.tryParse(u?['walletBalance']?.toString() ?? '') ??
+        0;
+    setState(() => _wallet = b);
   }
 
   Future<void> _refresh() async {

@@ -132,7 +132,9 @@ class _BidReviewDialogState extends State<_BidReviewDialog> {
     );
     final after = widget.walletBefore - total;
     final insufficient = after < 0;
-    final cannot = insufficient || !win.allowed;
+    final hasOpenWhenCloseOnly = win.closeOnly &&
+        widget.rows.any((r) => r.sessionLabel.toUpperCase() == 'OPEN');
+    final cannot = insufficient || !win.allowed || hasOpenWhenCloseOnly;
     final borderColor = Colors.white.withValues(alpha: 0.14);
     final headerTitle = widget.marketTitle.isEmpty
         ? 'Confirm Bets'
@@ -202,6 +204,18 @@ class _BidReviewDialogState extends State<_BidReviewDialog> {
                             padding: const EdgeInsets.only(bottom: 10),
                             child: Text(
                               win.message!,
+                              style: TextStyle(
+                                color: Colors.red.shade700,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                        if (hasOpenWhenCloseOnly)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: Text(
+                              'Opening time has passed — open-session bets are not allowed. '
+                              'Switch to CLOSE on the betting screen so lines are submitted as close.',
                               style: TextStyle(
                                 color: Colors.red.shade700,
                                 fontSize: 13,

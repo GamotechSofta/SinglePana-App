@@ -16,6 +16,8 @@ class SignupPage extends StatefulWidget {
 }
 
 class _SignupPageState extends State<SignupPage> {
+  final _firstName = TextEditingController();
+  final _lastName = TextEditingController();
   final _phone = TextEditingController();
   final _password = TextEditingController();
   final _confirm = TextEditingController();
@@ -28,6 +30,8 @@ class _SignupPageState extends State<SignupPage> {
 
   @override
   void dispose() {
+    _firstName.dispose();
+    _lastName.dispose();
     _phone.dispose();
     _password.dispose();
     _confirm.dispose();
@@ -46,6 +50,8 @@ class _SignupPageState extends State<SignupPage> {
     setState(() => _loading = true);
     try {
       final result = await AuthService.instance.register(
+        firstName: _firstName.text.trim(),
+        lastName: _lastName.text.trim(),
         phone: _phone.text.trim(),
         password: _password.text,
       );
@@ -101,7 +107,7 @@ class _SignupPageState extends State<SignupPage> {
           ),
           const SizedBox(height: 4),
           Text(
-            'Sign up with your phone number',
+            'Sign up with your name and phone number',
             style: TextStyle(
               color: wide ? Colors.grey.shade600 : Colors.grey.shade400,
               fontSize: 14,
@@ -110,6 +116,40 @@ class _SignupPageState extends State<SignupPage> {
           ),
           const SizedBox(height: 10),
           if (_error != null) AuthErrorBanner(message: _error!, mobileStyle: !wide),
+          TextFormField(
+            controller: _firstName,
+            textCapitalization: TextCapitalization.words,
+            decoration: _decoration(
+              label: 'First name *',
+              hint: 'First name',
+              wide: wide,
+              icon: Icons.person_outline,
+            ),
+            validator: (v) {
+              final t = v?.trim() ?? '';
+              if (t.isEmpty) return 'First name is required';
+              if (t.length > 80) return 'First name is too long';
+              return null;
+            },
+          ),
+          const SizedBox(height: 12),
+          TextFormField(
+            controller: _lastName,
+            textCapitalization: TextCapitalization.words,
+            decoration: _decoration(
+              label: 'Last name *',
+              hint: 'Last name',
+              wide: wide,
+              icon: Icons.person_outline,
+            ),
+            validator: (v) {
+              final t = v?.trim() ?? '';
+              if (t.isEmpty) return 'Last name is required';
+              if (t.length > 80) return 'Last name is too long';
+              return null;
+            },
+          ),
+          const SizedBox(height: 12),
           TextFormField(
             controller: _phone,
             keyboardType: TextInputType.phone,

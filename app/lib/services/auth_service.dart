@@ -49,18 +49,52 @@ class AuthService {
     await saveUser(u);
   }
 
-  /// `POST /users/login` — same body as React.
+  /// `POST /users/logout-device` — same payload as backend (phone, password, deviceId).
+  Future<AuthResult> logoutDevice({
+    required String phone,
+    required String password,
+    String? deviceId,
+  }) async {
+    final id = deviceId ?? await DeviceIdService.instance.getOrCreate();
+    final uri = Uri.parse('$kApiBaseUrl/users/logout-device');
+    final response = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'phone': phone.trim(),
+        'password': password,
+        'deviceId': id,
+      }),
+    );
+
+    return _parseAuthResponse(response, requireUserData: false);
+  }
+
+  /// `POST /users/login` — same body as React ([phone], [password], [deviceId]).
+  /// When [logoutOtherDevices] is true, calls [logoutDevice] first, then logs in.
   Future<AuthResult> login({
     required String phone,
     required String password,
+    bool logoutOtherDevices = false,
   }) async {
+    final phoneTrim = phone.trim();
     final deviceId = await DeviceIdService.instance.getOrCreate();
+
+    if (logoutOtherDevices) {
+      final cleared = await logoutDevice(
+        phone: phoneTrim,
+        password: password,
+        deviceId: deviceId,
+      );
+      if (!cleared.ok) return cleared;
+    }
+
     final uri = Uri.parse('$kApiBaseUrl/users/login');
     final response = await http.post(
       uri,
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
-        'phone': phone,
+        'phone': phoneTrim,
         'password': password,
         'deviceId': deviceId,
       }),
@@ -69,32 +103,28 @@ class AuthService {
     return _parseAuthResponse(response);
   }
 
-  /// Not in the React app yet; typical REST name is [register].
-  /// Change path here if your backend uses e.g. `/users/signup`.
+  /// `POST /users/signup` — [firstName], [lastName], [phone], [password], [deviceId].
   Future<AuthResult> register({
+    required String firstName,
+    required String lastName,
     required String phone,
     required String password,
   }) async {
     final deviceId = await DeviceIdService.instance.getOrCreate();
-    const paths = ['/users/register', '/users/signup', '/users/create'];
-    AuthResult? fallback;
-    for (final path in paths) {
-      final uri = Uri.parse('$kApiBaseUrl$path');
-      final response = await http.post(
-        uri,
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'phone': phone,
-          'password': password,
-          'deviceId': deviceId,
-        }),
-      );
-      final parsed = _parseAuthResponse(response, requireUserData: false);
-      if (parsed.ok) return parsed;
-      fallback ??= parsed;
-      if (response.statusCode == 409) return parsed;
-    }
-    return fallback ?? const AuthResult(ok: false, message: 'Signup failed');
+    final uri = Uri.parse('$kApiBaseUrl/users/signup');
+    final response = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'firstName': firstName.trim(),
+        'lastName': lastName.trim(),
+        'phone': phone.trim(),
+        'password': password,
+        'deviceId': deviceId,
+      }),
+    );
+
+    return _parseAuthResponse(response, requireUserData: false);
   }
 
   AuthResult _parseAuthResponse(

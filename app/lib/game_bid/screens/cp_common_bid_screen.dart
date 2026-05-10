@@ -143,10 +143,13 @@ class _CpCommonBidScreenState extends State<CpCommonBidScreen> {
       }
     }
     if (_includeTriple) {
-      for (var i = 0; i <= 9; i++) {
-        final pana = '$i$i$i';
+      // One triple per selected digit (ddd), not “all digits in one triple” (impossible for two distinct digits).
+      for (final d in required) {
+        final di = int.tryParse(d);
+        if (di == null) continue;
+        final pana = '$di$di$di';
         if (!isValidTriplePana(pana)) continue;
-        if (required.every(pana.contains)) merged[pana] = pts.toInt();
+        merged[pana] = pts.toInt();
       }
     }
 
@@ -309,6 +312,44 @@ class _CpCommonBidScreenState extends State<CpCommonBidScreen> {
               );
             },
           ),
+          if (_includeTriple) ...[
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text('Triple panas (SPDPT)', style: GameBidUi.sectionLabel),
+            ),
+            const SizedBox(height: 6),
+            if (_selectedDigits.isEmpty)
+              Text(
+                'Select digit(s) — each chosen digit adds its triple (e.g. 7 → 777).',
+                style: GameBidUi.emptyHint.copyWith(height: 1.3),
+              )
+            else
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final d in _selectedDigits)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: AppColors.surfaceCard.withValues(alpha: 0.55),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: AppColors.gold.withValues(alpha: 0.38)),
+                      ),
+                      child: Text(
+                        '$d$d$d',
+                        style: const TextStyle(
+                          color: CasinoUi.lightGold,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 16,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+          ],
           const SizedBox(height: 10),
           TextField(
             controller: _ptsCtrl,

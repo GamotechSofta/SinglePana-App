@@ -32,6 +32,8 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
   Map<String, dynamic>? _hintData;
   List<_BetLine> _betLines = const [_BetLine()];
   String? _guessFeedback;
+  /// Study list: original API order vs reversed (Q100…Q1).
+  bool _quizQuestionOrderAscending = true;
   Map<String, dynamic>? _fairnessResult;
   bool _submitting = false;
 
@@ -404,12 +406,14 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
       );
     }
 
+    final orderHint = _studyQuestionSourceIndices();
     return ListView.builder(
       padding: const EdgeInsets.all(6),
-      itemCount: _visibleQuestionCount.clamp(0, _questions.length),
+      itemCount: _visibleQuestionCount.clamp(0, orderHint.length),
       itemBuilder: (context, i) {
-        final row = _questions[i];
-        final rowId = '${row['id'] ?? i}';
+        final srcIdx = orderHint[i];
+        final row = _questions[srcIdx];
+        final rowId = '${row['id'] ?? srcIdx}';
         final options = (row['options'] is Map) ? Map<String, dynamic>.from(row['options'] as Map) : <String, dynamic>{};
         final revealed = _answerRevealed[rowId] ?? false;
         return Container(
@@ -427,7 +431,7 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
                 children: [
                   Expanded(
                     child: Text(
-                      'Q${i.toString().padLeft(2, '0')} · $drawCurrent',
+                      'Q${(srcIdx + 1).toString().padLeft(_questions.length > 99 ? 3 : 2, '0')} · $drawCurrent',
                       style: const TextStyle(fontSize: 8.5, fontWeight: FontWeight.w700, color: Color(0xFF1A4D2E)),
                     ),
                   ),
@@ -594,7 +598,42 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
                     const SizedBox(height: 0),
                     SizedBox(
                       height: 51,
-                      child: _buildQuizSelector(),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(child: _buildQuizSelector()),
+                          const SizedBox(width: 6),
+                          Tooltip(
+                            message: 'Reorder questions: ascending (1→N) or descending (N→1)',
+                            child: Material(
+                              color: const Color(0xFF5C2222),
+                              borderRadius: BorderRadius.circular(6),
+                              child: InkWell(
+                                onTap: () => setState(() => _quizQuestionOrderAscending = !_quizQuestionOrderAscending),
+                                borderRadius: BorderRadius.circular(6),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      const Icon(Icons.filter_list, size: 16, color: Color(0xFFF5E14A)),
+                                      Text(
+                                        _quizQuestionOrderAscending ? 'Asc' : 'Desc',
+                                        style: const TextStyle(
+                                          color: Color(0xFFF5E14A),
+                                          fontSize: 9,
+                                          fontWeight: FontWeight.w800,
+                                          height: 1,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                     const SizedBox(height: 4),
                     Expanded(
@@ -664,6 +703,13 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
     );
   }
 
+  List<int> _studyQuestionSourceIndices() {
+    final n = _questions.length;
+    if (n == 0) return const [];
+    if (_quizQuestionOrderAscending) return List<int>.generate(n, (i) => i);
+    return List<int>.generate(n, (i) => n - 1 - i);
+  }
+
   List<String> _remainingSlotsForToday() {
     final nextIso = (_slotData?['nextSlotStartIso'] ?? '').toString().trim();
     final nextDt = DateTime.tryParse(nextIso)?.toLocal();
@@ -689,7 +735,8 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
   }
 
   Widget _buildStudyTable(String quizLabel, String drawCurrent) {
-    final totalRows = _visibleQuestionCount.clamp(0, _questions.length);
+    final order = _studyQuestionSourceIndices();
+    final totalRows = _visibleQuestionCount.clamp(0, order.length);
     const borderColor = Color(0xFFCFB187);
 
     return Container(
@@ -777,8 +824,10 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
                         padding: EdgeInsets.zero,
                         itemCount: totalRows,
                         itemBuilder: (context, i) {
-                          final row = _questions[i];
-                          final id = '${row['id'] ?? i}';
+                          final srcIdx = order[i];
+                          final row = _questions[srcIdx];
+                          final id = '${row['id'] ?? srcIdx}';
+                          final qnPad = _questions.length > 99 ? 3 : 2;
                           final options = (row['options'] is Map) ? Map<String, dynamic>.from(row['options'] as Map) : <String, dynamic>{};
                           final reveal = _answerRevealed[id] ?? false;
                           return SizedBox(
@@ -798,7 +847,7 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
                                       mainAxisAlignment: MainAxisAlignment.center,
                                       children: [
                                         Text(
-                                          'Question No. ${i.toString().padLeft(2, '0')}',
+                                          'Question No. ${(srcIdx + 1).toString().padLeft(qnPad, '0')}',
                                           style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Colors.black),
                                         ),
                                         Text(

@@ -19,6 +19,8 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
   List<_QuizGroup> _groups = const [];
   _DrawFilter _drawFilter = _DrawFilter.all;
   DateTime _selectedDate = DateTime.now();
+  /// Full ticket ids currently being cancelled (prevents double submit).
+  final Set<String> _cancellingTicketIds = {};
 
   @override
   void initState() {
@@ -37,7 +39,20 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
     if (status == 'win') return 'Won';
     if (status == 'lose') return 'Lost';
     if (status == 'pending') return 'Pending';
+    if (status == 'cancelled') return 'Cancelled';
     return status.isEmpty ? '-' : status;
+  }
+
+  bool _rowIsCancelled(Map<String, dynamic> row) {
+    final st =
+        '${row['status'] ?? row['ticketStatus'] ?? ''}'.trim().toLowerCase();
+    if (st == 'cancelled' || st == 'canceled' || st == 'void') return true;
+    if (row['cancelled'] == true ||
+        row['isCancelled'] == true ||
+        row['isCanceled'] == true) {
+      return true;
+    }
+    return false;
   }
 
   /// Decodes Mongo-style fields that may be a string or `{ "$oid": "..." }`.
@@ -124,6 +139,7 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
   }
 
   String _displayStatus(Map<String, dynamic> row, _QuizGroup group) {
+    if (_rowIsCancelled(row)) return 'cancelled';
     final slotEnded = row['slotEnded'] == true || group.slotEnded;
     final winning = row['winningNumber'] != null
         ? '${row['winningNumber']}'.padLeft(2, '0')
@@ -134,6 +150,105 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
     }
     final status = '${row['status'] ?? 'pending'}'.trim().toLowerCase();
     return status.isEmpty ? 'pending' : status;
+  }
+
+  /// True when the slot has not closed yet — user may cancel the whole ticket via API.
+  bool _canCancelFullTicket(_QuizGroup group) {
+    if (group.lines.isEmpty) return false;
+    if (group.slotEnded) return false;
+    for (final row in group.lines) {
+      final st = _displayStatus(row, group);
+      if (st == 'win' || st == 'lose' || st == 'cancelled') return false;
+    }
+    return _ticketIdForCancelApi(group).isNotEmpty;
+  }
+
+  /// Full ticket id for `DELETE .../my-quiz-tickets/:id?mode=2d` (same as batch id).
+  String _ticketIdForCancelApi(_QuizGroup group) {
+    if (group.lines.isEmpty) return '';
+    return _ticketBatchIdRaw(group.lines.first);
+  }
+
+  Future<void> _cancelFullTicket(_QuizGroup group) async {
+    final ticketId = _ticketIdForCancelApi(group);
+    if (ticketId.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Missing ticket id — cannot cancel.')),
+      );
+      return;
+    }
+    if (_cancellingTicketIds.contains(ticketId)) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Cancel full ticket?'),
+        content: const Text(
+          'This cancels all bets on this ticket for the current draw. You can only cancel before results are out.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('No')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Yes, cancel'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final headers = await _authHeaders();
+    if (headers.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please login first.')),
+      );
+      return;
+    }
+
+    setState(() => _cancellingTicketIds.add(ticketId));
+    try {
+      final uri = Uri.parse(
+        '$kApiBaseUrl/quiz/my-quiz-tickets/${Uri.encodeComponent(ticketId)}?mode=2d',
+      );
+      final res = await http.delete(uri, headers: headers);
+      Map<String, dynamic>? body;
+      try {
+        if (res.body.isNotEmpty) {
+          body = jsonDecode(res.body) as Map<String, dynamic>?;
+        }
+      } catch (_) {}
+
+      if (!mounted) return;
+
+      if (res.statusCode == 401) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Session expired. Please login again.')),
+        );
+        return;
+      }
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        await _load(showFullScreenLoading: false);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(body?['message']?.toString() ?? 'Ticket cancelled.')),
+        );
+        return;
+      }
+      final msg = body?['message']?.toString() ?? 'Could not cancel ticket.';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Network error. Try again.')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _cancellingTicketIds.remove(ticketId));
+      }
+    }
   }
 
   List<_QuizGroup> _groupRows(List<Map<String, dynamic>> rows) {
@@ -187,11 +302,17 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
     return groups;
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = '';
-    });
+  /// Reload tickets for the selected date. Use [showFullScreenLoading]: false after actions like cancel
+  /// so the list refreshes without replacing the whole body with a spinner.
+  Future<void> _load({bool showFullScreenLoading = true}) async {
+    if (showFullScreenLoading) {
+      setState(() {
+        _loading = true;
+        _error = '';
+      });
+    } else if (mounted) {
+      setState(() => _error = '');
+    }
     try {
       final headers = await _authHeaders();
       if (headers.isEmpty) {
@@ -445,6 +566,34 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
                                                             ),
                                                           ),
                                                         ),
+                                                      if (_canCancelFullTicket(group)) ...[
+                                                        Builder(
+                                                          builder: (context) {
+                                                            final cancelId = _ticketIdForCancelApi(group);
+                                                            final busy = _cancellingTicketIds.contains(cancelId);
+                                                            return TextButton(
+                                                              style: TextButton.styleFrom(
+                                                                foregroundColor: const Color(0xFFB91C1C),
+                                                                side: const BorderSide(color: Color(0xFFB91C1C), width: 1),
+                                                                shape: RoundedRectangleBorder(
+                                                                  borderRadius: BorderRadius.circular(6),
+                                                                ),
+                                                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                                                minimumSize: Size.zero,
+                                                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                                              ),
+                                                              onPressed: busy ? null : () => _cancelFullTicket(group),
+                                                              child: Text(
+                                                                busy ? 'Cancelling…' : 'Cancel full ticket',
+                                                                style: const TextStyle(
+                                                                  fontSize: 11,
+                                                                  fontWeight: FontWeight.w700,
+                                                                ),
+                                                              ),
+                                                            );
+                                                          },
+                                                        ),
+                                                      ],
                                                     ],
                                                   ),
                                                 ),
@@ -523,7 +672,9 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
                                                                       ? const Color(0xFF15803D)
                                                                       : status == 'lose'
                                                                           ? const Color(0xFFB91C1C)
-                                                                          : const Color(0xFFB45309);
+                                                                          : status == 'cancelled'
+                                                                              ? const Color(0xFF6B7280)
+                                                                              : const Color(0xFFB45309);
                                                                   final winPayout = num.tryParse('${row['winPayout'] ?? ''}') ?? 0;
                                                                   return DataRow(
                                                                     cells: [

@@ -71,6 +71,8 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
     'triples',
   ];
   static const quickModes = ['box', 'str', 'sp', 'fp', 'bp', 'ap'];
+  /// Motor random lines only for Single (STR) / Duplicates (DP-style) / Triples — not box/SP/FP etc.
+  static const Set<String> _motorAllowedModes = {'str', 'duplicates', 'triples'};
   static const panelOptions = ['A', 'B', 'C'];
   static const digitOptions = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
   static const rateOptions = [10, 20, 30, 50, 100, 200];
@@ -491,6 +493,10 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
         .toList();
   }
 
+  List<String> _motorModesFromSelection() {
+    return _normalizedModes().where((m) => _motorAllowedModes.contains(m)).toList();
+  }
+
   void _addToast(String msg) {
     setState(() => _toast = msg);
     Timer(const Duration(seconds: 2), () {
@@ -601,16 +607,29 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
     _appendBets([num3], modes, pts);
   }
 
+  String _digitsAppend(String v, String d, int maxLen) {
+    final next = '$v$d'.replaceAll(RegExp(r'\D'), '');
+    if (next.isEmpty) return '';
+    return next.substring(0, math.min(maxLen, next.length));
+  }
+
   void _digitInput(String d) {
     var autoAdd = false;
     setState(() {
-      String append(String v, int max) {
-        final next = '$v$d'.replaceAll(RegExp(r'\D'), '');
-        return next.substring(0, math.min(max, next.length));
+      switch (_activeTarget) {
+        case _InputTarget.number:
+          final before = _inputNumber.length;
+          _inputNumber = _digitsAppend(_inputNumber, d, 3);
+          if (before < 3 && _inputNumber.length == 3) autoAdd = true;
+        case _InputTarget.rangeFrom:
+          _rangeFrom = _digitsAppend(_rangeFrom, d, 3);
+        case _InputTarget.rangeTo:
+          _rangeTo = _digitsAppend(_rangeTo, d, 3);
+        case _InputTarget.qty:
+          _qty = _digitsAppend(_qty, d, 4);
+        case _InputTarget.points:
+          _points = _digitsAppend(_points, d, 6);
       }
-      final before = _inputNumber.length;
-      _inputNumber = append(_inputNumber, 3);
-      if (before < 3 && _inputNumber.length == 3) autoAdd = true;
       _validationMsg = '';
     });
     if (autoAdd) {
@@ -623,21 +642,76 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
 
   void _deleteOne() {
     setState(() {
-      _inputNumber = _inputNumber.substring(0, math.max(0, _inputNumber.length - 1));
+      String chop(String s) => s.substring(0, math.max(0, s.length - 1));
+      switch (_activeTarget) {
+        case _InputTarget.number:
+          _inputNumber = chop(_inputNumber);
+        case _InputTarget.rangeFrom:
+          _rangeFrom = chop(_rangeFrom);
+        case _InputTarget.rangeTo:
+          _rangeTo = chop(_rangeTo);
+        case _InputTarget.qty:
+          _qty = chop(_qty);
+        case _InputTarget.points:
+          _points = chop(_points);
+      }
       _validationMsg = '';
     });
   }
 
   void _clearActive() {
     setState(() {
-      _inputNumber = '';
+      switch (_activeTarget) {
+        case _InputTarget.number:
+          _inputNumber = '';
+        case _InputTarget.rangeFrom:
+          _rangeFrom = '';
+        case _InputTarget.rangeTo:
+          _rangeTo = '';
+        case _InputTarget.qty:
+          _qty = '';
+        case _InputTarget.points:
+          _points = '';
+      }
       _validationMsg = '';
     });
   }
 
   void _adjustActive(int delta) {
-    final current = int.tryParse(_inputNumber) ?? 0;
-    setState(() => _inputNumber = math.max(0, math.min(999, current + delta)).toString());
+    setState(() {
+      void bumpIntString(String Function() get, void Function(String) set, int min, int max) {
+        final current = int.tryParse(get()) ?? 0;
+        set(math.max(min, math.min(max, current + delta)).toString());
+      }
+
+      switch (_activeTarget) {
+        case _InputTarget.number:
+          bumpIntString(() => _inputNumber, (v) => _inputNumber = v, 0, 999);
+        case _InputTarget.rangeFrom:
+          bumpIntString(() => _rangeFrom, (v) => _rangeFrom = v, 0, 999);
+        case _InputTarget.rangeTo:
+          bumpIntString(() => _rangeTo, (v) => _rangeTo = v, 0, 999);
+        case _InputTarget.qty:
+          bumpIntString(() => _qty, (v) => _qty = v, 0, 1000);
+        case _InputTarget.points:
+          bumpIntString(() => _points, (v) => _points = v, 0, 999999);
+      }
+    });
+  }
+
+  String _keypadCenterDisplay() {
+    switch (_activeTarget) {
+      case _InputTarget.number:
+        return _inputNumber.isEmpty ? '0' : _inputNumber;
+      case _InputTarget.rangeFrom:
+        return _rangeFrom.isEmpty ? '0' : _rangeFrom;
+      case _InputTarget.rangeTo:
+        return _rangeTo.isEmpty ? '0' : _rangeTo;
+      case _InputTarget.qty:
+        return _qty.isEmpty ? '0' : _qty;
+      case _InputTarget.points:
+        return _points.isEmpty ? '0' : _points;
+    }
   }
 
   bool get _slotOpenForBuy {
@@ -739,15 +813,15 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
     }
   }
 
-  Future<void> _cancelLatestPending() async {
-    final idx = _tickets.indexWhere((t) => t.status == 'pending');
-    if (idx < 0) {
-      _addToast('No active ticket to cancel before draw time.');
-      return;
-    }
+  List<int> _pendingTicketIndices() {
+    return [for (var i = 0; i < _tickets.length; i++) if (_tickets[i].status == 'pending') i];
+  }
+
+  Future<void> _cancelTicketAtIndex(int idx, void Function()? onDone) async {
+    if (idx < 0 || idx >= _tickets.length || _tickets[idx].status != 'pending') return;
     final t = _tickets[idx];
     final confirmed = await _showCancelBetDialog(t);
-    if (confirmed != true) return;
+    if (confirmed != true || !mounted) return;
     setState(() {
       _tickets[idx] = _TicketEntry(
         id: t.id,
@@ -760,6 +834,131 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
       _validationMsg = 'Ticket ${t.gameId} cancelled. Refund ${t.totalPoints}.';
     });
     _addToast('Ticket cancelled');
+    onDone?.call();
+  }
+
+  String _formatTicketCreatedAt(DateTime dt) {
+    final h = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+    final ampm = dt.hour >= 12 ? 'PM' : 'AM';
+    return '${dt.month}/${dt.day} $h:${dt.minute.toString().padLeft(2, '0')} $ampm';
+  }
+
+  Future<void> _showActiveTicketsCancelDialog() async {
+    if (_pendingTicketIndices().isEmpty) {
+      _addToast('No active ticket to cancel before draw time.');
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            final indices = _pendingTicketIndices();
+            if (indices.isEmpty) {
+              return AlertDialog(
+                backgroundColor: const Color(0xFF171717),
+                title: const Text(
+                  'Active tickets',
+                  style: TextStyle(color: Colors.white, fontSize: 14),
+                ),
+                content: const Text(
+                  'No active tickets left.',
+                  style: TextStyle(color: Color(0xFFD4D4D8), fontSize: 12),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(dialogContext).pop(),
+                    child: const Text('Close', style: TextStyle(color: Color(0xFF60A5FA))),
+                  ),
+                ],
+              );
+            }
+
+            final listHeight = math.min(380.0, indices.length * 76.0 + 8).toDouble();
+            return AlertDialog(
+              backgroundColor: const Color(0xFF171717),
+              title: const Text(
+                'Active tickets · Cancel before draw',
+                style: TextStyle(color: Colors.white, fontSize: 14),
+              ),
+              content: SizedBox(
+                width: math.max(MediaQuery.of(context).size.width * 0.4, 360),
+                height: listHeight,
+                child: ListView.builder(
+                  itemCount: indices.length,
+                  itemBuilder: (context, row) {
+                    final idx = indices[row];
+                    final t = _tickets[idx];
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Material(
+                        color: const Color(0xFF262626),
+                        borderRadius: BorderRadius.circular(8),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      t.gameId,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w800,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Points: ${t.totalPoints} · ${_formatTicketCreatedAt(t.createdAt)}',
+                                      style: TextStyle(color: Colors.grey.shade400, fontSize: 10),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              ElevatedButton(
+                                onPressed: () async {
+                                  await _cancelTicketAtIndex(
+                                    idx,
+                                    () => setModalState(() {}),
+                                  );
+                                  if (dialogContext.mounted &&
+                                      _pendingTicketIndices().isEmpty) {
+                                    Navigator.of(dialogContext).pop();
+                                  }
+                                },
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFFDC2626),
+                                  foregroundColor: Colors.white,
+                                  minimumSize: const Size(0, 34),
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+                                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                ),
+                                child: const Text('Cancel ticket', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800)),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Close', style: TextStyle(color: Color(0xFFA1A1AA))),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   void _resetAllFields() {
@@ -803,7 +1002,7 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
       return;
     }
     if (label == 'Cancel Bet') {
-      unawaited(_cancelLatestPending());
+      unawaited(_showActiveTicketsCancelDialog());
       return;
     }
     if (label == 'Result') {
@@ -1412,13 +1611,28 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
             height: 24,
             child: ElevatedButton(
               onPressed: () {
-                final pool = _selectedDigits.isEmpty ? digitOptions : _selectedDigits.toList();
+                if (_selectedDigits.isEmpty) {
+                  setState(
+                    () => _validationMsg = 'Motor: select at least one digit first.',
+                  );
+                  _addToast('Motor: select at least one digit');
+                  return;
+                }
+                final motorModes = _motorModesFromSelection();
+                if (motorModes.isEmpty) {
+                  setState(
+                    () => _validationMsg = 'Motor: select Single, Duplicates, or Triples first.',
+                  );
+                  _addToast('Motor: select Single, Duplicates, or Triples');
+                  return;
+                }
+                final pool = _selectedDigits.toList();
                 final r = math.Random();
                 final nums = <String>[];
                 for (int i = 0; i < 5; i++) {
                   nums.add('${pool[r.nextInt(pool.length)]}${pool[r.nextInt(pool.length)]}${pool[r.nextInt(pool.length)]}');
                 }
-                _appendBets(nums, _normalizedModes().isEmpty ? ['box'] : _normalizedModes(), _selectedRate);
+                _appendBets(nums, motorModes, _selectedRate);
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFFDC2626),
@@ -1529,9 +1743,9 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
   }
 
   Widget _pillField(String label, String value, _InputTarget target) {
-    final active = target == _InputTarget.number;
+    final active = target == _activeTarget;
     return InkWell(
-      onTap: () => setState(() => _activeTarget = _InputTarget.number),
+      onTap: () => setState(() => _activeTarget = target),
       child: Container(
         height: 24,
         width: label == 'ADD NUMBER' ? 118 : 58,
@@ -1605,24 +1819,27 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
               const SizedBox(width: 8),
               _labeledInput('QTY', _pillField('Qty', _qty, _InputTarget.qty)),
               const SizedBox(width: 8),
-              SizedBox(
-                height: 24,
-                child: ElevatedButton(
-                  onPressed: _addBet,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF111827),
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(22),
-                      side: const BorderSide(color: Color(0xFF334155)),
+              _labeledInput(
+                'Add',
+                SizedBox(
+                  height: 24,
+                  child: ElevatedButton(
+                    onPressed: _addBet,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF111827),
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(22),
+                        side: const BorderSide(color: Color(0xFF334155)),
+                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
                     ),
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
-                  ),
-                  child: const Text(
-                    'ADD',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w900,
-                      color: Colors.white,
+                    child: const Text(
+                      'Add',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w900,
+                        color: Colors.white,
+                      ),
                     ),
                   ),
                 ),
@@ -1896,7 +2113,7 @@ class _Lottery3DPageState extends State<Lottery3DPage> {
   }
 
   Widget _buildRightSection() {
-    final centerValue = _inputNumber.isEmpty ? '0' : _inputNumber;
+    final centerValue = _keypadCenterDisplay();
 
     return Column(
       children: [

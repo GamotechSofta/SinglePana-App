@@ -43,7 +43,8 @@ class _AppHeaderState extends State<AppHeader> with WidgetsBindingObserver {
     WalletService.instance.refreshBalanceInStorage().then((_) {
       if (mounted) _loadFromStorage();
     });
-    _balanceTicker = Timer.periodic(const Duration(seconds: 30), (_) {
+    // Poll so admin-approved credits reflect without app restart (paired with Funds tabs + app resume).
+    _balanceTicker = Timer.periodic(const Duration(seconds: 12), (_) {
       WalletService.instance.refreshBalanceInStorage().then((_) {
         if (mounted) _loadFromStorage();
       });

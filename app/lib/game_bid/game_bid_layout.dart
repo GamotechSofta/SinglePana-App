@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
 import '../constants/remote_assets.dart';
 import '../theme/app_colors.dart';
@@ -68,6 +69,11 @@ class GameBidLayout extends StatelessWidget {
         bottom: false,
         child: Column(
           children: [
+            _SessionValiditySync(
+              session: session,
+              sessionOptions: sessionOptions,
+              onSessionChanged: onSessionChanged,
+            ),
             CasinoUi.backdropBlur(
               borderRadius: BorderRadius.zero,
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -296,7 +302,12 @@ class GameBidLayout extends StatelessWidget {
                         Expanded(
                           flex: 2,
                           child: FilledButton(
-                            onPressed: (onSubmit == null || bidsCount == 0 || !win.allowed) ? null : onSubmit,
+                            onPressed: (onSubmit == null ||
+                                    bidsCount == 0 ||
+                                    !win.allowed ||
+                                    !sessionOptions.contains(session))
+                                ? null
+                                : onSubmit,
                             style: GameBidUi.primaryFilled(),
                             child: Text(submitLabel, textAlign: TextAlign.center),
                           ),
@@ -310,4 +321,50 @@ class GameBidLayout extends StatelessWidget {
       ),
     );
   }
+}
+
+/// When OPEN is no longer available (running / close-only window), updates the parent
+/// [session] via [onSessionChanged]. The dropdown can show CLOSE from [initialValue]
+/// while the bid screen state still said OPEN, so every line was submitted as open.
+class _SessionValiditySync extends StatefulWidget {
+  const _SessionValiditySync({
+    required this.session,
+    required this.sessionOptions,
+    required this.onSessionChanged,
+  });
+
+  final String session;
+  final List<String> sessionOptions;
+  final ValueChanged<String> onSessionChanged;
+
+  @override
+  State<_SessionValiditySync> createState() => _SessionValiditySyncState();
+}
+
+class _SessionValiditySyncState extends State<_SessionValiditySync> {
+  @override
+  void initState() {
+    super.initState();
+    _syncAfterFrameIfNeeded();
+  }
+
+  @override
+  void didUpdateWidget(covariant _SessionValiditySync oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncAfterFrameIfNeeded();
+  }
+
+  void _syncAfterFrameIfNeeded() {
+    final opts = widget.sessionOptions;
+    if (opts.isEmpty) return;
+    if (opts.contains(widget.session)) return;
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (opts.contains(widget.session)) return;
+      widget.onSessionChanged(opts.first);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => const SizedBox.shrink();
 }
