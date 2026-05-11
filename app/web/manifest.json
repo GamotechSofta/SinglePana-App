@@ -1,9 +1,9 @@
 {
-    "name": "app",
-    "short_name": "app",
+    "name": "Shri Balaji",
+    "short_name": "Shri Balaji",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
+    "background_color": "#0d1117",
     "theme_color": "#0175C2",
     "description": "A new Flutter project.",
     "orientation": "portrait-primary",

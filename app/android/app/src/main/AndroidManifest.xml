@@ -3,7 +3,7 @@
          release merges main only, so it must live here or APIs will fail in app-release.apk. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <application
-        android:label="app"
+        android:label="Shri Balaji"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

@@ -75,7 +75,7 @@ class _SinglePanaAppState extends State<SinglePanaApp> with WidgetsBindingObserv
   Widget build(BuildContext context) {
     return MaterialApp(
       navigatorKey: SessionCoordinator.instance.navigatorKey,
-      title: 'SinglePana',
+      title: 'Shri Balaji',
       theme: buildAppTheme(),
       // Cannot set [home] and also register `/` in [routes] — use initialRoute for splash.
       initialRoute: '/splash',
