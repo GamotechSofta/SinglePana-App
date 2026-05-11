@@ -98,7 +98,7 @@ class SessionCoordinator {
     _logoutInFlight = true;
     try {
       stopHeartbeat();
-      await AuthService.instance.clearUser();
+      await AuthService.instance.logoutThisDevice();
       if (message != null && message.isNotEmpty) {
         _pendingLoginMessage = message;
       }

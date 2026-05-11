@@ -18,6 +18,17 @@ class DeviceIdService {
     return id;
   }
 
+  /// Clears the stored id so the next [getOrCreate] mints a new one (e.g. server marked old id inactive).
+  Future<void> clearStoredId() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_kDeviceIdKey);
+  }
+
+  Future<String> regenerate() async {
+    await clearStoredId();
+    return getOrCreate();
+  }
+
   String _generateId() {
     const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
     final r = Random.secure();

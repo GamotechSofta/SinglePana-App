@@ -154,7 +154,7 @@ class _ProfilePageState extends State<ProfilePage> with WidgetsBindingObserver {
 
   Future<void> _logout() async {
     SessionCoordinator.instance.stopHeartbeat();
-    await AuthService.instance.clearUser();
+    await AuthService.instance.logoutThisDevice();
     if (!mounted) return;
     Navigator.of(
       context,

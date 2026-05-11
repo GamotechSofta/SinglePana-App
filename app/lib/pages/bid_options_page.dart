@@ -8,11 +8,18 @@ import '../utils/market_timing.dart';
 import 'game_bid_page.dart';
 
 class _BidOpt {
-  const _BidOpt({required this.id, required this.title, required this.iconUrl});
+  const _BidOpt({
+    required this.id,
+    required this.title,
+    required this.iconUrl,
+    this.gameMode,
+  });
 
   final double id;
   final String title;
   final String iconUrl;
+  /// When set (e.g. `'bulk'`), overrides inferring mode from the word "bulk" in [title].
+  final String? gameMode;
 }
 
 const _singleIcon =
@@ -31,8 +38,7 @@ const _halfSangamIcon =
     'https://res.cloudinary.com/dzd47mpdo/image/upload/v1770033165/Untitled_design_c5hag8.svg';
 
 final _allOptions = <_BidOpt>[
-  const _BidOpt(id: 1, title: 'Single Digit', iconUrl: _singleIcon),
-  const _BidOpt(id: 2, title: 'Single Digit Bulk', iconUrl: _singleIcon),
+  const _BidOpt(id: 2, title: 'Single Digit', iconUrl: _singleIcon, gameMode: 'bulk'),
   const _BidOpt(id: 3, title: 'Jodi', iconUrl: _jodiIcon),
   const _BidOpt(id: 4, title: 'Jodi Bulk', iconUrl: _jodiIcon),
   const _BidOpt(id: 5, title: 'Single Pana', iconUrl: _spIcon),
@@ -102,7 +108,6 @@ class _BidOptionsPageState extends State<BidOptionsPage> {
 
     final starlineAllowed = {
       'Single Digit',
-      'Single Digit Bulk',
       'Odd Even',
       'SP Common',
       'CP',
@@ -215,7 +220,8 @@ class _BidOptionsPageState extends State<BidOptionsPage> {
               itemCount: visible.length,
               itemBuilder: (context, i) {
                 final o = visible[i];
-                final bulk = o.title.toLowerCase().contains('bulk');
+                final mode = o.gameMode ??
+                    (o.title.toLowerCase().contains('bulk') ? 'bulk' : 'easy');
                 return Material(
                   color: Colors.transparent,
                   borderRadius: BorderRadius.circular(12),
@@ -226,7 +232,7 @@ class _BidOptionsPageState extends State<BidOptionsPage> {
                         arguments: GameBidArgs(
                           market: market,
                           betType: o.title,
-                          gameMode: bulk ? 'bulk' : 'easy',
+                          gameMode: mode,
                         ),
                       );
                     },

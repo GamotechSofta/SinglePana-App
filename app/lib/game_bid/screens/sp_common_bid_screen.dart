@@ -191,6 +191,7 @@ class _SpCommonBidScreenState extends State<SpCommonBidScreen> {
             if (res.newBalance != null) _wallet = res.newBalance!.toDouble();
           });
         }
+        return res;
       },
     );
   }

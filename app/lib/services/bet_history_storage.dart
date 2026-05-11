@@ -38,17 +38,23 @@ class BetHistoryStorage {
     required List<BidRowVm> rows,
     required int totalBets,
     required double totalAmount,
+    List<String>? serverBetIds,
   }) async {
-    final rowMaps = rows
-        .map(
-          (r) => {
-            'id': r.id.toString(),
-            'number': r.number,
-            'points': num.tryParse(r.points) ?? int.tryParse(r.points) ?? 0,
-            'type': r.sessionLabel.toUpperCase(),
-          },
-        )
-        .toList();
+    final rowMaps = <Map<String, dynamic>>[];
+    for (var i = 0; i < rows.length; i++) {
+      final r = rows[i];
+      final fromServer = serverBetIds != null && i < serverBetIds.length
+          ? serverBetIds[i].trim()
+          : '';
+      final idStr =
+          fromServer.isNotEmpty ? fromServer : r.id.toString();
+      rowMaps.add({
+        'id': idStr,
+        'number': r.number,
+        'points': num.tryParse(r.points) ?? int.tryParse(r.points) ?? 0,
+        'type': r.sessionLabel.toUpperCase(),
+      });
+    }
     final entry = <String, dynamic>{
       'id': '${DateTime.now().millisecondsSinceEpoch}-${rows.length}',
       'userId': userId,

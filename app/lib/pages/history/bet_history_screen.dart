@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
 import '../../services/auth_service.dart';
@@ -227,17 +228,33 @@ class _BetHistoryViewState extends State<BetHistoryView> {
     return computed.state;
   }
 
+  /// Last 8 hex chars of a MongoDB ObjectId (`…` length 24) for compact display in history.
+  String _displayBetId(String raw) {
+    final t = raw.trim();
+    if (t.isEmpty || t == '-') return t;
+    if (RegExp(r'^[a-fA-F0-9]{24}$').hasMatch(t)) {
+      return t.substring(16);
+    }
+    return t;
+  }
+
   Widget _detailRow(
     String label,
     String value, {
     Color? valueColor,
     FontWeight valueWeight = FontWeight.w700,
+    bool copyable = false,
+    String? copyValue,
   }) {
+    final clip = (copyValue ?? value).trim();
+    final canCopy = copyable && clip.isNotEmpty && clip != '-';
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
+            flex: 2,
             child: Text(
               label,
               style: TextStyle(
@@ -248,6 +265,7 @@ class _BetHistoryViewState extends State<BetHistoryView> {
           ),
           const SizedBox(width: 8),
           Expanded(
+            flex: 3,
             child: Text(
               value,
               textAlign: TextAlign.right,
@@ -257,6 +275,30 @@ class _BetHistoryViewState extends State<BetHistoryView> {
               ),
             ),
           ),
+          if (canCopy) ...[
+            const SizedBox(width: 4),
+            IconButton(
+              tooltip: 'Copy bet ID',
+              padding: EdgeInsets.zero,
+              visualDensity: VisualDensity.compact,
+              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+              icon: Icon(
+                Icons.copy_rounded,
+                size: 20,
+                color: AppColors.gold.withValues(alpha: 0.9),
+              ),
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: clip));
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Bet ID copied'),
+                    duration: Duration(seconds: 2),
+                  ),
+                );
+              },
+            ),
+          ],
         ],
       ),
     );
@@ -450,7 +492,12 @@ class _BetHistoryViewState extends State<BetHistoryView> {
                                 ),
                                 _detailRow('Payout', payoutText == '-' ? '-' : '₹$payoutText'),
                                 _detailRow('Placed At', createdAt),
-                                _detailRow('Bet ID', betId),
+                                _detailRow(
+                                  'Bet ID',
+                                  _displayBetId(betId),
+                                  copyable: true,
+                                  copyValue: betId,
+                                ),
                               ],
                             ),
                           ),
@@ -603,7 +650,12 @@ class _BetHistoryViewState extends State<BetHistoryView> {
                                 ),
                                 _detailRow('Payout', payoutText == '-' ? '-' : '₹$payoutText'),
                                 _detailRow('Placed At', createdAt),
-                                _detailRow('Bet ID', betId),
+                                _detailRow(
+                                  'Bet ID',
+                                  _displayBetId(betId),
+                                  copyable: true,
+                                  copyValue: betId,
+                                ),
                               ],
                             ),
                           ),
@@ -1320,7 +1372,9 @@ class _GameBetHistoryViewState extends State<GameBetHistoryView> {
     return AppColors.goldMuted.withValues(alpha: 0.95);
   }
 
-  Widget _cell(String label, String value, {Color? valueColor}) {
+  Widget _cell(String label, String value, {Color? valueColor, bool copyable = false}) {
+    final canCopy =
+        copyable && value.trim().isNotEmpty && value.trim() != '-';
     return Expanded(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1334,15 +1388,44 @@ class _GameBetHistoryViewState extends State<GameBetHistoryView> {
             ),
           ),
           const SizedBox(height: 4),
-          Text(
-            value,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: 14,
-              color: valueColor ?? _histLightGold,
-              fontWeight: FontWeight.w700,
-            ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  value,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: valueColor ?? _histLightGold,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              if (canCopy)
+                IconButton(
+                  tooltip: 'Copy Round ID',
+                  padding: EdgeInsets.zero,
+                  visualDensity: VisualDensity.compact,
+                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  icon: Icon(
+                    Icons.copy_rounded,
+                    size: 18,
+                    color: AppColors.gold.withValues(alpha: 0.9),
+                  ),
+                  onPressed: () async {
+                    await Clipboard.setData(ClipboardData(text: value.trim()));
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Round ID copied'),
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                ),
+            ],
           ),
         ],
       ),
@@ -1600,7 +1683,7 @@ class _GameBetHistoryViewState extends State<GameBetHistoryView> {
                           children: [
                             _cell('Game Code', gameCode.isEmpty ? '-' : gameCode),
                             const SizedBox(width: 12),
-                            _cell('Round ID', roundKey),
+                            _cell('Round ID', roundKey, copyable: true),
                           ],
                         ),
                         const SizedBox(height: 10),

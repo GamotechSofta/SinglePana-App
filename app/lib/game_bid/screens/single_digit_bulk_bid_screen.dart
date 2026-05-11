@@ -152,6 +152,7 @@ class _SingleDigitBulkBidScreenState extends State<SingleDigitBulkBidScreen> {
             if (res.newBalance != null) _wallet = res.newBalance!.toDouble();
           });
         }
+        return res;
       },
     );
   }

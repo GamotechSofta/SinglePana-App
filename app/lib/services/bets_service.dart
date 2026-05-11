@@ -46,11 +46,14 @@ class PlaceBetResult {
     required this.success,
     this.message,
     this.newBalance,
+    this.betIds,
   });
 
   final bool success;
   final String? message;
   final num? newBalance;
+  /// From `POST /bets/place` → `data.betIds` (Mongo `_id` per line, same order as request).
+  final List<String>? betIds;
 }
 
 /// `POST /bets/place` — same contract as [frontend/src/api/bets.js] `placeBet`.
@@ -154,11 +157,28 @@ class BetsService {
     }
 
     num? newBal;
+    List<String>? betIdList;
     final inner = data?['data'];
-    if (inner is Map<String, dynamic> && inner['newBalance'] != null) {
-      newBal = inner['newBalance'] as num?;
+    if (inner is Map<String, dynamic>) {
+      if (inner['newBalance'] != null) {
+        newBal = inner['newBalance'] as num?;
+      }
+      final rawIds = inner['betIds'];
+      if (rawIds is List) {
+        betIdList = [];
+        for (final e in rawIds) {
+          final id = _toObjectIdString(e);
+          if (id != null && id.isNotEmpty) betIdList.add(id);
+        }
+        if (betIdList.isEmpty) betIdList = null;
+      }
     }
-    return PlaceBetResult(success: true, message: data?['message']?.toString(), newBalance: newBal);
+    return PlaceBetResult(
+      success: true,
+      message: data?['message']?.toString(),
+      newBalance: newBal,
+      betIds: betIdList,
+    );
   }
 
   Future<Map<String, dynamic>?> fetchRatesCurrent() async {

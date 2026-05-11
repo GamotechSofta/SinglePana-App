@@ -83,7 +83,7 @@ class AppDrawer extends StatelessWidget {
                           if (item.isLogout) {
                             _closeDrawer();
                             SessionCoordinator.instance.stopHeartbeat();
-                            await AuthService.instance.clearUser();
+                            await AuthService.instance.logoutThisDevice();
                             if (shellContext.mounted) {
                               Navigator.of(
                                 shellContext,

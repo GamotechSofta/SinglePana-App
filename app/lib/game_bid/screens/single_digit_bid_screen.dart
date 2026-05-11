@@ -216,6 +216,7 @@ class _SingleDigitBidScreenState extends State<SingleDigitBidScreen> {
             if (res.newBalance != null) _wallet = res.newBalance!.toDouble();
           });
         }
+        return res;
       },
     );
   }

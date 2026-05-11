@@ -185,6 +185,7 @@ class _FullSangamBidScreenState extends State<FullSangamBidScreen> {
             if (res.newBalance != null) _wallet = res.newBalance!.toDouble();
           });
         }
+        return res;
       },
     );
   }

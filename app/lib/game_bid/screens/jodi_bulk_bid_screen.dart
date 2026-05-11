@@ -3,6 +3,7 @@ import 'dart:async';
 
 import '../../services/auth_service.dart';
 import '../../services/bets_service.dart';
+import '../../theme/app_colors.dart';
 import '../../theme/casino_ui.dart';
 import '../bet_date_prefs.dart';
 import '../bid_review_dialog.dart';
@@ -277,11 +278,12 @@ class _JodiBulkBidScreenState extends State<JodiBulkBidScreen> {
         if (!res.success) throw Exception(res.message ?? 'Failed');
         await applyNewBalance(res.newBalance);
         await clearBetSelectedDate();
-        if (!mounted) return;
+        if (!mounted) return res;
         setState(() {
           if (res.newBalance != null) _wallet = res.newBalance!.toDouble();
           _clearAll();
         });
+        return res;
       },
     );
   }
@@ -463,38 +465,47 @@ class _JodiBulkBidScreenState extends State<JodiBulkBidScreen> {
                           width: 38,
                           child: Padding(
                             padding: const EdgeInsets.all(1),
-                            child: Column(
-                              children: [
-                                Text(
-                                  '$r$c',
-                                  style: TextStyle(
-                                    fontSize: 8,
-                                    color: CasinoUi.mutedGold(0.75),
-                                    fontWeight: FontWeight.w600,
-                                    height: 1,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                TextFormField(
-                                  key: ValueKey('joc_${r}_${c}_${_cells['$r$c']}'),
-                                  initialValue: _cells['$r$c'],
-                                  onChanged: (v) => setState(() => _cells['$r$c'] = _sanitize(v)),
-                                  onTap: () => _applyQuickToCell('$r$c'),
-                                  textAlign: TextAlign.center,
-                                  keyboardType: TextInputType.number,
-                                  style: GameBidUi.betInputStyle(fontSize: 10, fontWeight: FontWeight.w600),
-                                  decoration: InputDecoration(
-                                    isDense: true,
-                                    hintText: 'Pts',
-                                    hintStyle: TextStyle(fontSize: 8, color: CasinoUi.mutedGold(0.5)),
-                                    fillColor: CasinoUi.fieldFill,
-                                    filled: true,
-                                    contentPadding: const EdgeInsets.symmetric(vertical: 4),
-                                    border: cellBorder,
-                                    enabledBorder: cellBorder,
-                                  ),
-                                ),
-                              ],
+                            child: Builder(
+                              builder: (context) {
+                                final key = '$r$c';
+                                final val = _cells[key] ?? '';
+                                final hasPoints = (int.tryParse(val) ?? 0) > 0;
+                                return Column(
+                                  children: [
+                                    Text(
+                                      key,
+                                      style: TextStyle(
+                                        fontSize: 8,
+                                        color: hasPoints ? CasinoUi.lightGold : CasinoUi.mutedGold(0.75),
+                                        fontWeight: hasPoints ? FontWeight.w800 : FontWeight.w600,
+                                        height: 1,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    TextFormField(
+                                      key: ValueKey('joc_${r}_${c}_$val'),
+                                      initialValue: val,
+                                      onChanged: (v) => setState(() => _cells[key] = _sanitize(v)),
+                                      onTap: () => _applyQuickToCell(key),
+                                      textAlign: TextAlign.center,
+                                      keyboardType: TextInputType.number,
+                                      style: GameBidUi.betInputStyle(fontSize: 10, fontWeight: FontWeight.w600),
+                                      decoration: InputDecoration(
+                                        isDense: true,
+                                        hintText: 'Pts',
+                                        hintStyle: TextStyle(fontSize: 8, color: CasinoUi.mutedGold(0.5)),
+                                        filled: true,
+                                        fillColor: hasPoints
+                                            ? AppColors.neonGreenDeep.withValues(alpha: 0.22)
+                                            : CasinoUi.fieldFill,
+                                        contentPadding: const EdgeInsets.symmetric(vertical: 4),
+                                        border: cellBorder,
+                                        enabledBorder: cellBorder,
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              },
                             ),
                           ),
                         ),

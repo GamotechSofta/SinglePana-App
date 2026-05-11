@@ -176,11 +176,12 @@ class _DpCommonBidScreenState extends State<DpCommonBidScreen> {
         if (!res.success) throw Exception(res.message ?? 'Failed');
         await applyNewBalance(res.newBalance);
         await clearBetSelectedDate();
-        if (!mounted) return;
+        if (!mounted) return res;
         setState(() {
           _clearLocal();
           if (res.newBalance != null) _wallet = res.newBalance!.toDouble();
         });
+        return res;
       },
     );
   }

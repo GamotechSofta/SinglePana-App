@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/bid_row_vm.dart';
 import '../services/auth_service.dart';
 import '../services/bet_history_storage.dart';
+import '../services/bets_service.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../theme/casino_ui.dart';
@@ -17,7 +18,7 @@ Future<void> showBidReviewDialog({
   required String marketTitle,
   required List<BidRowVm> rows,
   required double walletBefore,
-  required Future<void> Function() onConfirm,
+  required Future<PlaceBetResult> Function() onConfirm,
   String labelKey = 'Bet',
   String? historyDateYmd,
 
@@ -61,7 +62,7 @@ class _BidReviewDialog extends StatefulWidget {
   final String marketTitle;
   final List<BidRowVm> rows;
   final double walletBefore;
-  final Future<void> Function() onConfirm;
+  final Future<PlaceBetResult> Function() onConfirm;
   final String labelKey;
   final String? historyDateYmd;
   final String? betCategoryTitle;
@@ -443,7 +444,7 @@ class _BidReviewDialogState extends State<_BidReviewDialog> {
                                     _err = null;
                                   });
                                   try {
-                                    await widget.onConfirm();
+                                    final placeRes = await widget.onConfirm();
                                     if (!context.mounted) return;
                                     final u = await AuthService.instance
                                         .getStoredUser();
@@ -482,6 +483,7 @@ class _BidReviewDialogState extends State<_BidReviewDialog> {
                                           rows: widget.rows,
                                           totalBets: widget.rows.length,
                                           totalAmount: totalAfter,
+                                          serverBetIds: placeRes.betIds,
                                         );
                                     if (!context.mounted) return;
                                     Navigator.pop(context);

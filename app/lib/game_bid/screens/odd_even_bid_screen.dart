@@ -210,6 +210,7 @@ class _OddEvenBidScreenState extends State<OddEvenBidScreen> {
             if (res.newBalance != null) _wallet = res.newBalance!.toDouble();
           });
         }
+        return res;
       },
     );
   }

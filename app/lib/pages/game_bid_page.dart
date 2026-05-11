@@ -12,7 +12,6 @@ import '../game_bid/screens/half_sangam_bid_screen.dart';
 import '../game_bid/screens/jodi_bulk_bid_screen.dart';
 import '../game_bid/screens/list_bid_screen.dart';
 import '../game_bid/screens/odd_even_bid_screen.dart';
-import '../game_bid/screens/single_digit_bid_screen.dart';
 import '../game_bid/screens/single_digit_bulk_bid_screen.dart';
 import '../game_bid/screens/single_pana_bid_screen.dart';
 import '../game_bid/screens/single_pana_bulk_bid_screen.dart';
@@ -97,7 +96,6 @@ Widget _widgetFor(
 ) {
   switch (key) {
     case 'single digit':
-      return SingleDigitBidScreen(market: market, title: title);
     case 'single digit bulk':
       return SingleDigitBulkBidScreen(market: market, title: title);
     case 'odd even':
