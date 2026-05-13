@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -14,11 +15,15 @@ class MyBets2DLotteryPage extends StatefulWidget {
 }
 
 class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
+  static const int _myBetsFetchLimit = 5000;
   bool _loading = true;
   String _error = '';
   List<_QuizGroup> _groups = const [];
   _DrawFilter _drawFilter = _DrawFilter.all;
   DateTime _selectedDate = DateTime.now();
+  final Set<String> _collapsedGroupKeys = {};
+  final Set<String> _loadingPlacedBetsKeys = {};
+  final Set<String> _loadedPlacedBetsKeys = {};
   /// Full ticket ids currently being cancelled (prevents double submit).
   final Set<String> _cancellingTicketIds = {};
 
@@ -102,11 +107,24 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
     const batchKeys = ['ticketId', 'ticketDisplayId', 'displayTicketId', 'displayId'];
     for (final key in batchKeys) {
       final raw = _mongoString(row[key]);
-      if (raw.isNotEmpty) return '$key|$raw';
+      if (raw.isNotEmpty) return '$key|$raw|${_createdAtMinuteBucket(row)}';
     }
     final full = _ticketBatchIdRaw(row);
-    if (full.isNotEmpty) return 'id|$full';
-    return _ticketIdLastEight(row);
+    if (full.isNotEmpty) return 'id|$full|${_createdAtMinuteBucket(row)}';
+    return '${_ticketIdLastEight(row)}|${_createdAtMinuteBucket(row)}';
+  }
+
+  String _createdAtMinuteBucket(Map<String, dynamic> row) {
+    final raw = '${row['createdAt'] ?? ''}'.trim();
+    final dt = DateTime.tryParse(raw);
+    if (dt == null) return 'unknown-minute';
+    final utc = dt.toUtc();
+    final y = utc.year.toString().padLeft(4, '0');
+    final m = utc.month.toString().padLeft(2, '0');
+    final d = utc.day.toString().padLeft(2, '0');
+    final h = utc.hour.toString().padLeft(2, '0');
+    final min = utc.minute.toString().padLeft(2, '0');
+    return '$y$m$d$h$min';
   }
 
   int _rowQuizId(Map<String, dynamic> row) => int.tryParse('${row['quizId'] ?? ''}') ?? 0;
@@ -328,11 +346,8 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
           '${_selectedDate.year.toString().padLeft(4, '0')}-'
           '${_selectedDate.month.toString().padLeft(2, '0')}-'
           '${_selectedDate.day.toString().padLeft(2, '0')}';
-      final uri = Uri.parse(
-        '$kApiBaseUrl/quiz/my-quiz-bets?limit=120&mode=2d&date=${Uri.encodeQueryComponent(dateKey)}',
-      );
-      final res = await http.get(uri, headers: headers);
-      final body = jsonDecode(res.body) as Map<String, dynamic>?;
+      final res = await _getMy2dTickets(headers: headers, dateKey: dateKey);
+      final body = _decodeJsonMap(res.body);
 
       if (!mounted) return;
       if (res.statusCode == 401) {
@@ -344,22 +359,38 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
         return;
       }
       if (res.statusCode < 200 || res.statusCode >= 300) {
+        final fallback = res.body.trim().isNotEmpty
+            ? 'Failed to load tickets. (${res.statusCode})'
+            : 'Failed to load tickets.';
         setState(() {
           _groups = const [];
           _loading = false;
-          _error = body?['message']?.toString() ?? 'Failed to load tickets.';
+          _error = body?['message']?.toString() ?? fallback;
         });
         return;
       }
 
-      final raw = (body?['data'] is List) ? (body!['data'] as List) : const [];
+      final raw = _extractRowsList(body);
       final rows = <Map<String, dynamic>>[
         for (final item in raw)
           if (item is Map) Map<String, dynamic>.from(item),
       ];
+      final grouped = _groupRows(rows);
       setState(() {
-        _groups = _groupRows(rows);
+        _groups = grouped;
+        _collapsedGroupKeys
+          ..clear()
+          ..addAll(grouped.map(_groupVisibilityKey));
+        _loadingPlacedBetsKeys.clear();
+        _loadedPlacedBetsKeys.clear();
         _loading = false;
+      });
+    } on TimeoutException {
+      if (!mounted) return;
+      setState(() {
+        _groups = const [];
+        _loading = false;
+        _error = 'Request timed out while loading tickets. Please tap Refresh.';
       });
     } catch (_) {
       if (!mounted) return;
@@ -369,6 +400,128 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
         _error = 'Failed to load tickets.';
       });
     }
+  }
+
+  Future<http.Response> _getMy2dTickets({
+    required Map<String, String> headers,
+    required String dateKey,
+  }) async {
+    final candidates = <Uri>[
+      Uri.parse(
+        '$kApiBaseUrl/quiz/my-quiz-bets?mode=2d&page=1&ticketLimit=0&limit=$_myBetsFetchLimit&date=${Uri.encodeQueryComponent(dateKey)}',
+      ),
+      Uri.parse(
+        '$kApiBaseUrl/quiz/my-quiz-bets?mode=2d&page=1&ticketLimit=0&limit=3000&date=${Uri.encodeQueryComponent(dateKey)}',
+      ),
+      Uri.parse(
+        '$kApiBaseUrl/quiz/my-quiz-bets?mode=2d&page=1&ticketLimit=0&limit=2000&date=${Uri.encodeQueryComponent(dateKey)}',
+      ),
+      Uri.parse(
+        '$kApiBaseUrl/quiz/my-quiz-bets?mode=2d&page=1&ticketLimit=0&limit=1200&date=${Uri.encodeQueryComponent(dateKey)}',
+      ),
+    ];
+    http.Response? lastResponse;
+    for (var i = 0; i < candidates.length; i++) {
+      try {
+        final response = await http
+            .get(candidates[i], headers: headers)
+            .timeout(Duration(seconds: i == 0 ? 20 : 15));
+        lastResponse = response;
+        final retryable = response.statusCode == 408 ||
+            response.statusCode == 429 ||
+            response.statusCode == 502 ||
+            response.statusCode == 503 ||
+            response.statusCode == 504;
+        if (!retryable || i == candidates.length - 1) return response;
+      } on TimeoutException {
+        if (i == candidates.length - 1) rethrow;
+      }
+    }
+    return lastResponse!;
+  }
+
+  Map<String, dynamic>? _decodeJsonMap(String source) {
+    if (source.trim().isEmpty) return null;
+    try {
+      final decoded = jsonDecode(source);
+      if (decoded is Map<String, dynamic>) return decoded;
+      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    } catch (_) {}
+    return null;
+  }
+
+  List _extractRowsList(Map<String, dynamic>? body) {
+    if (body == null) return const [];
+    const listKeys = ['data', 'rows', 'tickets', 'bets'];
+    for (final key in listKeys) {
+      final value = body[key];
+      if (value is List) return value;
+    }
+    return const [];
+  }
+
+  _BetsSummary _summaryForGroup(_QuizGroup group) {
+    var totalBetsCount = 0;
+    var totalAmount = 0.0;
+    var wonBetsCount = 0;
+    var winningPrize = 0.0;
+    var lossAmount = 0.0;
+    for (final row in group.lines) {
+      totalBetsCount += 1;
+      final amount = num.tryParse('${row['amount'] ?? ''}')?.toDouble() ?? 0;
+      totalAmount += amount;
+      final status = _displayStatus(row, group);
+      if (status == 'win') {
+        wonBetsCount += 1;
+        final payout = num.tryParse('${row['winPayout'] ?? ''}')?.toDouble() ?? 0;
+        winningPrize += payout;
+      } else if (status == 'lose') {
+        lossAmount += amount;
+      }
+    }
+    return _BetsSummary(
+      totalBetsCount: totalBetsCount,
+      totalAmount: totalAmount,
+      wonBetsCount: wonBetsCount,
+      winningPrize: winningPrize,
+      lossAmount: lossAmount,
+    );
+  }
+
+  String _money(double value) {
+    if (value == value.roundToDouble()) return value.toInt().toString();
+    return value.toStringAsFixed(2);
+  }
+
+  String _groupVisibilityKey(_QuizGroup group) {
+    if (group.lines.isEmpty) return group.slotStartIso;
+    return '${group.slotStartIso}|${_ticketBatchKey(group.lines.first)}';
+  }
+
+  bool _isGroupExpanded(_QuizGroup group) =>
+      !_collapsedGroupKeys.contains(_groupVisibilityKey(group));
+
+  Future<void> _toggleGroup(_QuizGroup group) async {
+    final key = _groupVisibilityKey(group);
+    final isExpanded = !_collapsedGroupKeys.contains(key);
+    if (isExpanded) {
+      setState(() => _collapsedGroupKeys.add(key));
+      return;
+    }
+
+    if (_loadedPlacedBetsKeys.contains(key)) {
+      setState(() => _collapsedGroupKeys.remove(key));
+      return;
+    }
+
+    setState(() {
+      _loadingPlacedBetsKeys.add(key);
+      _loadedPlacedBetsKeys.add(key);
+      _collapsedGroupKeys.remove(key);
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    if (!mounted) return;
+    setState(() => _loadingPlacedBetsKeys.remove(key));
   }
 
   @override
@@ -494,6 +647,10 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
                                         itemBuilder: (context, index) {
                                           final group = visibleGroups[index];
                                           final winningHdr = _headerWinningText(group);
+                                          final summary = _summaryForGroup(group);
+                                          final groupKey = _groupVisibilityKey(group);
+                                          final expanded = _isGroupExpanded(group);
+                                          final loadingPlacedBets = _loadingPlacedBetsKeys.contains(groupKey);
                                           return Container(
                                             margin: const EdgeInsets.only(bottom: 10),
                                             decoration: BoxDecoration(
@@ -566,6 +723,67 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
                                                             ),
                                                           ),
                                                         ),
+                                                      Text(
+                                                        'Total Bets: ${summary.totalBetsCount}',
+                                                        style: const TextStyle(
+                                                          color: Color(0xFF1A4D6E),
+                                                          fontSize: 11,
+                                                          fontWeight: FontWeight.w700,
+                                                        ),
+                                                      ),
+                                                      Text(
+                                                        'Total Amount: ₹${_money(summary.totalAmount)}',
+                                                        style: const TextStyle(
+                                                          color: Color(0xFF1A4D6E),
+                                                          fontSize: 11,
+                                                          fontWeight: FontWeight.w700,
+                                                        ),
+                                                      ),
+                                                      Text(
+                                                        'Won: ${summary.wonBetsCount}/${summary.totalBetsCount}',
+                                                        style: const TextStyle(
+                                                          color: Color(0xFF166534),
+                                                          fontSize: 11,
+                                                          fontWeight: FontWeight.w700,
+                                                        ),
+                                                      ),
+                                                      Text(
+                                                        'Winning Prize: ₹${_money(summary.winningPrize)}',
+                                                        style: const TextStyle(
+                                                          color: Color(0xFF166534),
+                                                          fontSize: 11,
+                                                          fontWeight: FontWeight.w700,
+                                                        ),
+                                                      ),
+                                                      Text(
+                                                        'Loss Amount: ₹${_money(summary.lossAmount)}',
+                                                        style: const TextStyle(
+                                                          color: Color(0xFFB91C1C),
+                                                          fontSize: 11,
+                                                          fontWeight: FontWeight.w700,
+                                                        ),
+                                                      ),
+                                                      OutlinedButton(
+                                                        onPressed: loadingPlacedBets ? null : () => _toggleGroup(group),
+                                                        style: OutlinedButton.styleFrom(
+                                                          foregroundColor: const Color(0xFF1D4ED8),
+                                                          side: const BorderSide(color: Color(0xFF93C5FD)),
+                                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                                          minimumSize: Size.zero,
+                                                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                                        ),
+                                                        child: Text(
+                                                          loadingPlacedBets
+                                                              ? 'Loading Bets...'
+                                                              : (expanded
+                                                                  ? 'Hide Placed Bets'
+                                                                  : 'Show Placed Bets'),
+                                                          style: const TextStyle(
+                                                            fontSize: 11,
+                                                            fontWeight: FontWeight.w700,
+                                                          ),
+                                                        ),
+                                                      ),
                                                       if (_canCancelFullTicket(group)) ...[
                                                         Builder(
                                                           builder: (context) {
@@ -597,30 +815,52 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
                                                     ],
                                                   ),
                                                 ),
-                                                LayoutBuilder(
-                                                  builder: (context, constraints) {
-                                                    final minTableWidth = constraints.maxWidth;
-                                                    return SingleChildScrollView(
-                                                      scrollDirection: Axis.horizontal,
-                                                      child: ConstrainedBox(
-                                                        constraints: BoxConstraints(minWidth: minTableWidth),
-                                                        child: DataTableTheme(
-                                                          data: const DataTableThemeData(
-                                                            headingTextStyle: TextStyle(
-                                                              color: Colors.black,
-                                                              fontSize: 11,
-                                                              fontWeight: FontWeight.w700,
-                                                            ),
-                                                            dataTextStyle: TextStyle(
-                                                              color: Colors.black,
-                                                              fontSize: 10,
-                                                              fontWeight: FontWeight.w600,
-                                                            ),
+                                                if (expanded && loadingPlacedBets)
+                                                  const Padding(
+                                                    padding: EdgeInsets.fromLTRB(10, 4, 10, 14),
+                                                    child: Row(
+                                                      children: [
+                                                        SizedBox(
+                                                          width: 18,
+                                                          height: 18,
+                                                          child: CircularProgressIndicator(strokeWidth: 2),
+                                                        ),
+                                                        SizedBox(width: 10),
+                                                        Text(
+                                                          'Loading placed bets...',
+                                                          style: TextStyle(
+                                                            color: Color(0xFF4B5563),
+                                                            fontWeight: FontWeight.w600,
                                                           ),
-                                                          child: DataTable(
-                                                            headingRowColor: WidgetStateProperty.all(const Color(0xFFD9E4F5)),
-                                                            dataRowColor: WidgetStateProperty.all(const Color(0xFFF8F8F8)),
-                                                            columns: const [
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                if (expanded && !loadingPlacedBets)
+                                                  LayoutBuilder(
+                                                    builder: (context, constraints) {
+                                                      final minTableWidth = constraints.maxWidth;
+                                                      return SingleChildScrollView(
+                                                        scrollDirection: Axis.horizontal,
+                                                        child: ConstrainedBox(
+                                                          constraints: BoxConstraints(minWidth: minTableWidth),
+                                                          child: DataTableTheme(
+                                                            data: const DataTableThemeData(
+                                                              headingTextStyle: TextStyle(
+                                                                color: Colors.black,
+                                                                fontSize: 11,
+                                                                fontWeight: FontWeight.w700,
+                                                              ),
+                                                              dataTextStyle: TextStyle(
+                                                                color: Colors.black,
+                                                                fontSize: 10,
+                                                                fontWeight: FontWeight.w600,
+                                                              ),
+                                                            ),
+                                                            child: DataTable(
+                                                              headingRowColor: WidgetStateProperty.all(const Color(0xFFD9E4F5)),
+                                                              dataRowColor: WidgetStateProperty.all(const Color(0xFFF8F8F8)),
+                                                              columns: const [
                                                               DataColumn(
                                                                 label: Text(
                                                                   'Quiz',
@@ -664,74 +904,91 @@ class _MyBets2DLotteryPageState extends State<MyBets2DLotteryPage> {
                                                                 ),
                                                               ),
                                                             ],
-                                                            rows: [
-                                                              for (final row in group.lines)
-                                                                () {
-                                                                  final status = _displayStatus(row, group);
-                                                                  final statusColor = status == 'win'
-                                                                      ? const Color(0xFF15803D)
-                                                                      : status == 'lose'
-                                                                          ? const Color(0xFFB91C1C)
-                                                                          : status == 'cancelled'
-                                                                              ? const Color(0xFF6B7280)
-                                                                              : const Color(0xFFB45309);
-                                                                  final winPayout = num.tryParse('${row['winPayout'] ?? ''}') ?? 0;
-                                                                  return DataRow(
-                                                                    cells: [
-                                                                      DataCell(
-                                                                        Text(
-                                                                          _quizLabelForRow(row),
-                                                                          style: const TextStyle(color: Colors.black, fontSize: 10, fontWeight: FontWeight.w700),
+                                                              rows: [
+                                                                for (final row in group.lines)
+                                                                  () {
+                                                                    final status = _displayStatus(row, group);
+                                                                    final statusColor = status == 'win'
+                                                                        ? const Color(0xFF15803D)
+                                                                        : status == 'lose'
+                                                                            ? const Color(0xFFB91C1C)
+                                                                            : status == 'cancelled'
+                                                                                ? const Color(0xFF6B7280)
+                                                                                : const Color(0xFFB45309);
+                                                                    final winPayout =
+                                                                        num.tryParse('${row['winPayout'] ?? ''}') ?? 0;
+                                                                    return DataRow(
+                                                                      cells: [
+                                                                        DataCell(
+                                                                          Text(
+                                                                            _quizLabelForRow(row),
+                                                                            style: const TextStyle(
+                                                                              color: Colors.black,
+                                                                              fontSize: 10,
+                                                                              fontWeight: FontWeight.w700,
+                                                                            ),
+                                                                          ),
                                                                         ),
-                                                                      ),
-                                                                      DataCell(
-                                                                        Text(
-                                                                          '${row['number'] ?? ''}'.padLeft(2, '0'),
-                                                                          style: const TextStyle(color: Colors.black, fontSize: 10, fontWeight: FontWeight.w700),
+                                                                        DataCell(
+                                                                          Text(
+                                                                            '${row['number'] ?? ''}'.padLeft(2, '0'),
+                                                                            style: const TextStyle(
+                                                                              color: Colors.black,
+                                                                              fontSize: 10,
+                                                                              fontWeight: FontWeight.w700,
+                                                                            ),
+                                                                          ),
                                                                         ),
-                                                                      ),
-                                                                      DataCell(
-                                                                        Text(
-                                                                          '₹${row['amount'] ?? 0}',
-                                                                          style: const TextStyle(color: Colors.black, fontSize: 10),
+                                                                        DataCell(
+                                                                          Text(
+                                                                            '₹${row['amount'] ?? 0}',
+                                                                            style: const TextStyle(color: Colors.black, fontSize: 10),
+                                                                          ),
                                                                         ),
-                                                                      ),
-                                                                      DataCell(
-                                                                        Text(
-                                                                          _statusLabel(status),
-                                                                          style: TextStyle(color: statusColor, fontSize: 10, fontWeight: FontWeight.w600),
+                                                                        DataCell(
+                                                                          Text(
+                                                                            _statusLabel(status),
+                                                                            style: TextStyle(
+                                                                              color: statusColor,
+                                                                              fontSize: 10,
+                                                                              fontWeight: FontWeight.w600,
+                                                                            ),
+                                                                          ),
                                                                         ),
-                                                                      ),
-                                                                      DataCell(
-                                                                        Text(
-                                                                          status == 'win'
-                                                                              ? (winPayout > 0 ? '₹$winPayout' : 'Processing...')
-                                                                              : '-',
-                                                                          style: const TextStyle(color: Colors.black, fontSize: 10),
+                                                                        DataCell(
+                                                                          Text(
+                                                                            status == 'win'
+                                                                                ? (winPayout > 0
+                                                                                    ? '₹$winPayout'
+                                                                                    : 'Processing...')
+                                                                                : '-',
+                                                                            style: const TextStyle(color: Colors.black, fontSize: 10),
+                                                                          ),
                                                                         ),
-                                                                      ),
-                                                                      DataCell(
-                                                                        Text(
-                                                                          group.isAdvanceDraw ? 'Advance' : 'Normal',
-                                                                          style: const TextStyle(color: Colors.black, fontSize: 10),
+                                                                        DataCell(
+                                                                          Text(
+                                                                            group.isAdvanceDraw ? 'Advance' : 'Normal',
+                                                                            style: const TextStyle(color: Colors.black, fontSize: 10),
+                                                                          ),
                                                                         ),
-                                                                      ),
-                                                                      DataCell(
-                                                                        TextButton(
-                                                                          onPressed: () => _showLineDetails(group, row),
-                                                                          child: const Text('View'),
+                                                                        DataCell(
+                                                                          TextButton(
+                                                                            onPressed: () => _showLineDetails(group, row),
+                                                                            child: const Text('View'),
+                                                                          ),
                                                                         ),
-                                                                      ),
-                                                                    ],
-                                                                  );
-                                                                }(),
-                                                            ],
+                                                                      ],
+                                                                    );
+                                                                  }(),
+                                                              ],
+                                                            ),
                                                           ),
                                                         ),
-                                                      ),
-                                                    );
-                                                  },
-                                                ),
+                                                      );
+                                                    },
+                                                  )
+                                                else
+                                                  const SizedBox(height: 10),
                                               ],
                                             ),
                                           );
@@ -810,6 +1067,22 @@ class _QuizGroup {
   final String? winningNumber;
   final bool isAdvanceDraw;
   final List<Map<String, dynamic>> lines;
+}
+
+class _BetsSummary {
+  const _BetsSummary({
+    required this.totalBetsCount,
+    required this.totalAmount,
+    required this.wonBetsCount,
+    required this.winningPrize,
+    required this.lossAmount,
+  });
+
+  final int totalBetsCount;
+  final double totalAmount;
+  final int wonBetsCount;
+  final double winningPrize;
+  final double lossAmount;
 }
 
 enum _DrawFilter { all, normal, advance }

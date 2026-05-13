@@ -63,6 +63,11 @@
 	<string>Upload payment screenshots when adding funds.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Take a photo of your payment receipt if you choose the camera.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoadsInWebContent</key>
+		<true/>
+	</dict>
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

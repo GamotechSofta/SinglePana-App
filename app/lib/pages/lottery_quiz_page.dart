@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 
 import '../config/api_config.dart';
 import '../services/auth_service.dart';
+import '../utils/devanagari_text.dart';
 
 class LotteryQuizPage extends StatefulWidget {
   const LotteryQuizPage({super.key});
@@ -32,19 +33,19 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
   Map<String, dynamic>? _hintData;
   List<_BetLine> _betLines = const [_BetLine()];
   String? _guessFeedback;
-  /// Study list: original API order vs reversed (Q100…Q1).
-  bool _quizQuestionOrderAscending = true;
   Map<String, dynamic>? _fairnessResult;
   bool _submitting = false;
 
   Timer? _slotPoll;
   Timer? _revealTicker;
   Timer? _hintPoll;
+  Map<String, dynamic>? _quizSettings;
 
   @override
   void initState() {
     super.initState();
     unawaited(_configureLandscape());
+    unawaited(_loadQuizSettings());
     unawaited(_pollSlotOnce());
     _slotPoll = Timer.periodic(const Duration(seconds: 2), (_) => unawaited(_pollSlotOnce()));
   }
@@ -104,6 +105,19 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
     } catch (_) {
       if (!mounted) return;
       setState(() => _slotErr = 'Slot sync failed');
+    }
+  }
+
+  Future<void> _loadQuizSettings() async {
+    try {
+      final res = await http.get(Uri.parse('$kApiBaseUrl/quiz/settings?mode=2d'));
+      final json = jsonDecode(res.body) as Map<String, dynamic>?;
+      if (!mounted) return;
+      if (res.statusCode >= 200 && res.statusCode < 300 && json?['success'] == true && json?['data'] is Map) {
+        setState(() => _quizSettings = Map<String, dynamic>.from(json!['data'] as Map));
+      }
+    } catch (_) {
+      // Keep existing behavior if settings are temporarily unavailable.
     }
   }
 
@@ -242,6 +256,64 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
     final m = sec ~/ 60;
     final s = sec % 60;
     return '$m:${s.toString().padLeft(2, '0')}';
+  }
+
+  int _toNonNegativeSeconds(dynamic raw) {
+    final value = raw is num ? raw.toInt() : int.tryParse('${raw ?? ''}');
+    if (value == null || value < 0) return 0;
+    return value;
+  }
+
+  int _settingsHintLeadSeconds() {
+    final settings = _quizSettings;
+    if (settings == null) return 0;
+    const keys = [
+      'secondsUntilHint',
+      'hintLeadSeconds',
+      'hintSeconds',
+      'hintCountdownSeconds',
+      'hintDurationSeconds',
+      'hintDurationSec',
+    ];
+    for (final key in keys) {
+      final v = _toNonNegativeSeconds(settings[key]);
+      if (v > 0) return v;
+    }
+    return 0;
+  }
+
+  int _secondsUntilHint() {
+    final slotSeconds = _toNonNegativeSeconds(_slotData?['secondsUntilHint']);
+    if (slotSeconds > 0) return slotSeconds;
+
+    final nextIso = '${_slotData?['nextSlotStartIso'] ?? ''}'.trim();
+    final nextSlotStart = DateTime.tryParse(nextIso)?.toLocal();
+    if (nextSlotStart != null) {
+      final diff = nextSlotStart.difference(DateTime.now()).inSeconds;
+      final fallback = _settingsHintLeadSeconds();
+      if (diff > 0 && fallback > 0) {
+        final derived = diff - fallback;
+        if (derived > 0) return derived;
+      }
+    }
+    return 0;
+  }
+
+  String _hintQuestionText(Map<String, dynamic>? hint) {
+    if (hint == null) return '';
+    const keys = ['questionText', 'question', 'text', 'hintQuestion'];
+    for (final key in keys) {
+      final value = '${hint[key] ?? ''}'.trim();
+      if (value.isNotEmpty) return value;
+    }
+    final nested = hint['questionData'];
+    if (nested is Map) {
+      for (final key in keys) {
+        final value = '${nested[key] ?? ''}'.trim();
+        if (value.isNotEmpty) return value;
+      }
+    }
+    return '';
   }
 
   Future<void> _submitQuizBets() async {
@@ -496,8 +568,8 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
   Widget build(BuildContext context) {
     final drawCurrent = '${_slotData?['drawLabelCurrent'] ?? '-'}';
     final remainingSlots = _remainingSlotsForToday();
-    final secsHint = int.tryParse('${_slotData?['secondsUntilHint'] ?? 0}') ?? 0;
-    final secsEnd = int.tryParse('${_slotData?['secondsUntilSlotEnd'] ?? 0}') ?? 0;
+    final secsHint = _secondsUntilHint();
+    final secsEnd = _toNonNegativeSeconds(_slotData?['secondsUntilSlotEnd']);
     final quizLabel = 'QUIZ${_selectedQuiz.toString().padLeft(2, '0')}';
 
     return ColoredBox(
@@ -536,7 +608,7 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
                           ? 'Server: $_slotErr'
                           : _hintPhase
                               ? 'Hint phase - Draw: $drawCurrent (${_formatCountdown(secsEnd)})'
-                              : 'Hint in 13.5 min (${_formatCountdown(secsHint)})',
+                              : 'Hint in ${_formatCountdown(secsHint)}',
                       style: const TextStyle(
                         color: Color(0xFF5C2222),
                         fontWeight: FontWeight.w800,
@@ -598,46 +670,13 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
                     const SizedBox(height: 0),
                     SizedBox(
                       height: 51,
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Expanded(child: _buildQuizSelector()),
-                          const SizedBox(width: 6),
-                          Tooltip(
-                            message: 'Reorder questions: ascending (1→N) or descending (N→1)',
-                            child: Material(
-                              color: const Color(0xFF5C2222),
-                              borderRadius: BorderRadius.circular(6),
-                              child: InkWell(
-                                onTap: () => setState(() => _quizQuestionOrderAscending = !_quizQuestionOrderAscending),
-                                borderRadius: BorderRadius.circular(6),
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      const Icon(Icons.filter_list, size: 16, color: Color(0xFFF5E14A)),
-                                      Text(
-                                        _quizQuestionOrderAscending ? 'Asc' : 'Desc',
-                                        style: const TextStyle(
-                                          color: Color(0xFFF5E14A),
-                                          fontSize: 9,
-                                          fontWeight: FontWeight.w800,
-                                          height: 1,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
+                      child: _buildQuizSelector(),
                     ),
                     const SizedBox(height: 4),
                     Expanded(
-                      child: _buildStudyTable(quizLabel, drawCurrent),
+                      child: _hintPhase
+                          ? _buildHintCard(drawCurrent)
+                          : _buildStudyTable(quizLabel, drawCurrent),
                     ),
                     const SizedBox(height: 6),
                     SizedBox(
@@ -688,6 +727,64 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
     );
   }
 
+  Widget _buildHintCard(String drawCurrent) {
+    final hintLoading =
+        _hintData == null || int.tryParse('${_hintData?['quizId'] ?? ''}') != _selectedQuiz;
+    final questionText = _hintQuestionText(_hintData);
+
+    if (hintLoading) {
+      return const Center(
+        child: Text(
+          'Loading hint...',
+          style: TextStyle(
+            color: Color(0xFF5C2222),
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: const Color(0xFF8B7355)),
+      ),
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Hint · $drawCurrent · QUIZ-${_selectedQuiz.toString().padLeft(2, '0')}',
+            style: quizDevanagariTextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+              color: const Color(0xFF1A6B2E),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'या प्रश्नाचा योग्य क्रमांक काय आहे?',
+            style: quizDevanagariTextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: const Color(0xFF4A1515),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            questionText.isEmpty ? '-' : questionText,
+            style: quizDevanagariTextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w700,
+              color: Colors.black,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   DateTime _nextQuarter(DateTime now) {
     final base = DateTime(now.year, now.month, now.day, now.hour, now.minute);
     final mins = base.hour * 60 + base.minute;
@@ -706,8 +803,16 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
   List<int> _studyQuestionSourceIndices() {
     final n = _questions.length;
     if (n == 0) return const [];
-    if (_quizQuestionOrderAscending) return List<int>.generate(n, (i) => i);
-    return List<int>.generate(n, (i) => n - 1 - i);
+    final order = List<int>.generate(n, (i) => i);
+    order.sort((a, b) {
+      final aq = int.tryParse('${_questions[a]['questionNo'] ?? ''}');
+      final bq = int.tryParse('${_questions[b]['questionNo'] ?? ''}');
+      if (aq != null && bq != null) return bq.compareTo(aq);
+      if (aq != null) return -1;
+      if (bq != null) return 1;
+      return b.compareTo(a);
+    });
+    return order;
   }
 
   List<String> _remainingSlotsForToday() {
@@ -828,6 +933,7 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
                           final row = _questions[srcIdx];
                           final id = '${row['id'] ?? srcIdx}';
                           final qnPad = _questions.length > 99 ? 3 : 2;
+                          final questionNo = int.tryParse('${row['questionNo'] ?? ''}');
                           final options = (row['options'] is Map) ? Map<String, dynamic>.from(row['options'] as Map) : <String, dynamic>{};
                           final reveal = _answerRevealed[id] ?? false;
                           return SizedBox(
@@ -847,7 +953,7 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
                                       mainAxisAlignment: MainAxisAlignment.center,
                                       children: [
                                         Text(
-                                          'Question No. ${(srcIdx + 1).toString().padLeft(qnPad, '0')}',
+                                          'Question No. ${((questionNo ?? (srcIdx + 1))).toString().padLeft(qnPad, '0')}',
                                           style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Colors.black),
                                         ),
                                         Text(
@@ -972,7 +1078,7 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('इस प्रश्न का उत्तर इस प्रश्न का क्रमांक है', style: TextStyle(color: Color(0xFF4A1515), fontWeight: FontWeight.w700)),
+                        const Text('या प्रश्नाचे उत्तर या प्रश्नाचा क्रमांक आहे', style: TextStyle(color: Color(0xFF4A1515), fontWeight: FontWeight.w700)),
                         const SizedBox(height: 6),
                         Text('${_hintData?['questionText'] ?? ''}', style: const TextStyle(fontWeight: FontWeight.w700)),
                       ],

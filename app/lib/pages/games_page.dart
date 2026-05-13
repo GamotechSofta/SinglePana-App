@@ -1,12 +1,9 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'package:url_launcher/url_launcher.dart';
 
-import '../config/api_config.dart';
-import '../services/auth_service.dart';
+import '../models/game_model.dart';
+import '../services/game_launch_service.dart';
 import '../theme/casino_ui.dart';
+import 'game_webview_screen.dart';
 
 class GamesPage extends StatefulWidget {
   const GamesPage({super.key});
@@ -27,71 +24,12 @@ class _GamesPageState extends State<GamesPage> {
   bool _loading = true;
   String _error = '';
   String _launchingCode = '';
-  List<_GameItem> _games = const [];
+  List<GameModel> _games = const [];
 
   @override
   void initState() {
     super.initState();
     _loadGames();
-  }
-
-  Future<Map<String, String>> _getAuthHeaders() async {
-    final user = await AuthService.instance.getStoredUser();
-    final token = user?['token']?.toString().trim() ?? '';
-    if (token.isEmpty) return const {};
-    return {'Authorization': 'Bearer $token'};
-  }
-
-  String _resolvePlayerId(Map<String, dynamic>? user) {
-    final id =
-        user?['_id']?.toString().trim() ??
-        user?['id']?.toString().trim() ??
-        user?['userId']?.toString().trim() ??
-        '';
-    return id;
-  }
-
-  Map<String, dynamic>? _decodeMap(String body) {
-    if (body.isEmpty) return null;
-    try {
-      final parsed = jsonDecode(body);
-      if (parsed is Map<String, dynamic>) return parsed;
-      if (parsed is Map) return parsed.map((k, v) => MapEntry('$k', v));
-    } catch (_) {}
-    return null;
-  }
-
-  Map<String, dynamic>? _asMap(dynamic value) {
-    if (value is Map<String, dynamic>) return value;
-    if (value is Map) {
-      return value.map((k, v) => MapEntry('$k', v));
-    }
-    return null;
-  }
-
-  Future<List<_GameItem>> _getAllGames() async {
-    final headers = await _getAuthHeaders();
-    final response = await http.get(
-      Uri.parse('$kApiBaseUrl/games'),
-      headers: {
-        'Content-Type': 'application/json',
-        ...headers,
-      },
-    );
-
-    final data = _decodeMap(response.body);
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw Exception(data?['message']?.toString() ?? 'Failed to load games');
-    }
-
-    final rawList = data?['data'];
-    if (rawList is! List) return const [];
-
-    return rawList
-        .map(_asMap)
-        .whereType<Map<String, dynamic>>()
-        .map(_GameItem.fromJson)
-        .toList();
   }
 
   Future<void> _loadGames() async {
@@ -100,7 +38,7 @@ class _GamesPageState extends State<GamesPage> {
       _error = '';
     });
     try {
-      final list = await _getAllGames();
+      final list = await GameLaunchService.instance.fetchGames();
       if (!mounted) return;
       setState(() {
         _games = list;
@@ -116,44 +54,10 @@ class _GamesPageState extends State<GamesPage> {
     }
   }
 
-  String _extractLaunchUrl(Map<String, dynamic>? body) {
-    final data = _asMap(body?['data']);
-    final nested = _asMap(data?['data']);
-    final options = [
-      body?['launchUrl'],
-      data?['launchUrl'],
-      nested?['launchUrl'],
-      data?['url'],
-      data?['gameUrl'],
-      data?['sessionUrl'],
-      data?['redirectUrl'],
-    ];
-    for (final value in options) {
-      final text = value?.toString().trim() ?? '';
-      if (text.isNotEmpty) return text;
-    }
-    return '';
-  }
-
-  Future<void> _launchGame(_GameItem game) async {
+  Future<void> _launchGame(GameModel game) async {
     final gameCode = game.gameCode.trim().toUpperCase();
     if (gameCode.isEmpty) {
       setState(() => _error = 'Missing gameCode');
-      return;
-    }
-
-    final user = await AuthService.instance.getStoredUser();
-    final externalPlayerId = _resolvePlayerId(user);
-    final authHeaders = await _getAuthHeaders();
-
-    if (externalPlayerId.isEmpty) {
-      if (!mounted) return;
-      setState(() => _error = 'Player not found. Please login again.');
-      return;
-    }
-    if (authHeaders['Authorization'] == null || authHeaders['Authorization']!.isEmpty) {
-      if (!mounted) return;
-      setState(() => _error = 'Session expired. Please login again.');
       return;
     }
 
@@ -163,50 +67,27 @@ class _GamesPageState extends State<GamesPage> {
     });
 
     try {
-      final payload = jsonEncode({
-        'gameCode': gameCode,
-        'externalPlayerId': externalPlayerId,
-        'currency': 'INR',
-        'locale': 'en',
-        'returnUrl': '',
-      });
-
-      final response = await http.post(
-        Uri.parse('$kApiBaseUrl/games/launch/${Uri.encodeComponent(gameCode)}'),
-        headers: {
-          'Content-Type': 'application/json',
-          ...authHeaders,
-        },
-        body: payload,
+      final launchResult = await GameLaunchService.instance.launchGame(
+        gameCode: gameCode,
       );
-
-      final data = _decodeMap(response.body);
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw Exception(data?['message']?.toString() ?? 'Failed to launch game');
-      }
-
-      final launchLink = _extractLaunchUrl(data);
-      if (launchLink.isEmpty) {
-        throw Exception('Failed to launch game');
-      }
-
-      final uri = Uri.tryParse(launchLink);
-      if (uri == null) {
-        throw Exception('Invalid game URL');
-      }
-
-      final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
-      if (!launched) {
-        throw Exception('Unable to open game URL');
-      }
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => GameWebViewScreen(
+            launchUrl: launchResult.launchUrl,
+            title: game.name.isEmpty ? game.gameCode : game.name,
+          ),
+        ),
+      );
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _error = e.toString().replaceFirst('Exception: ', '').trim();
       });
     } finally {
-      if (!mounted) return;
-      setState(() => _launchingCode = '');
+      if (mounted) {
+        setState(() => _launchingCode = '');
+      }
     }
   }
 
@@ -379,7 +260,7 @@ class _GameCard extends StatelessWidget {
     required this.onTap,
   });
 
-  final _GameItem game;
+  final GameModel game;
   final ({Color start, Color end}) theme;
   final bool loading;
   final VoidCallback? onTap;
@@ -414,7 +295,7 @@ class _GameCard extends StatelessWidget {
                       child: Image.network(
                         game.image,
                         fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => _FallbackInitials(title: title),
+                        errorBuilder: (_, _, _) => _FallbackInitials(title: title),
                       ),
                     )
                   else
@@ -502,25 +383,3 @@ String _getInitials(String value) {
   return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
 }
 
-class _GameItem {
-  const _GameItem({
-    required this.id,
-    required this.gameCode,
-    required this.name,
-    required this.image,
-  });
-
-  final String id;
-  final String gameCode;
-  final String name;
-  final String image;
-
-  factory _GameItem.fromJson(Map<String, dynamic> json) {
-    return _GameItem(
-      id: (json['_id'] ?? json['id'] ?? '').toString(),
-      gameCode: (json['gameCode'] ?? '').toString(),
-      name: (json['name'] ?? 'Unnamed Game').toString(),
-      image: (json['image'] ?? '').toString(),
-    );
-  }
-}

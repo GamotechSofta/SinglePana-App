@@ -335,7 +335,7 @@ class _JodiBulkBidScreenState extends State<JodiBulkBidScreen> {
             Padding(
               padding: const EdgeInsets.only(top: 4, bottom: 2),
               child: Text(
-                'Quick point ₹$_activeQuickPoint selected. Tap any row digit, column digit, or jodi (00-99) to apply.',
+                'Quick point ₹$_activeQuickPoint selected. Tap row/column Pts, row or column digit, or a jodi cell (00-99) to apply.',
                 style: TextStyle(color: CasinoUi.mutedGold(0.78), fontSize: 10),
               ),
             ),
@@ -392,6 +392,7 @@ class _JodiBulkBidScreenState extends State<JodiBulkBidScreen> {
                           padding: const EdgeInsets.all(1),
                           child: TextFormField(
                             controller: _colBulkCtrls[c],
+                            onTap: () => _applyQuickToCol(c),
                             onChanged: (v) => setState(() {
                               _setSanitized(_colBulkCtrls[c]!, v);
                               _scheduleColApply(c);
@@ -438,6 +439,7 @@ class _JodiBulkBidScreenState extends State<JodiBulkBidScreen> {
                           padding: const EdgeInsets.all(1),
                           child: TextFormField(
                             controller: _rowBulkCtrls[r],
+                            onTap: () => _applyQuickToRow(r),
                             onChanged: (v) => setState(() {
                               _setSanitized(_rowBulkCtrls[r]!, v);
                               _scheduleRowApply(r);

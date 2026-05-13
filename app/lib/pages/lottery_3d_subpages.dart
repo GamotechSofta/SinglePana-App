@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 
 import '../config/api_config.dart';
 import '../services/auth_service.dart';
+import '../utils/devanagari_text.dart';
 
 class Lottery3DResultPage extends StatefulWidget {
   const Lottery3DResultPage({super.key});
@@ -245,11 +246,13 @@ class _Lottery3DQuizPageState extends State<Lottery3DQuizPage> {
   String _error = '';
   List<Map<String, dynamic>> _questions = const [];
   Map<String, dynamic>? _hint;
+  Map<String, dynamic>? _quizSettings;
   Timer? _poll;
 
   @override
   void initState() {
     super.initState();
+    unawaited(_loadQuizSettings());
     _refreshAll();
     _poll = Timer.periodic(const Duration(seconds: 3), (_) => _refreshSlotAndHintOnly());
   }
@@ -274,6 +277,7 @@ class _Lottery3DQuizPageState extends State<Lottery3DQuizPage> {
       _loading = true;
       _error = '';
     });
+    await _loadQuizSettings();
     await _loadSlot();
     if (_isHintPhase) {
       await _loadHint();
@@ -288,6 +292,19 @@ class _Lottery3DQuizPageState extends State<Lottery3DQuizPage> {
     }
     if (!mounted) return;
     setState(() => _loading = false);
+  }
+
+  Future<void> _loadQuizSettings() async {
+    try {
+      final res = await http.get(Uri.parse('$kApiBaseUrl/quiz/settings?mode=3d'));
+      final json = jsonDecode(res.body) as Map<String, dynamic>?;
+      if (!mounted) return;
+      if (res.statusCode >= 200 && res.statusCode < 300 && json?['success'] == true && json?['data'] is Map) {
+        setState(() => _quizSettings = Map<String, dynamic>.from(json!['data'] as Map));
+      }
+    } catch (_) {
+      // Keep slot-driven UI if settings are unavailable.
+    }
   }
 
   Future<void> _loadSlot() async {
@@ -417,19 +434,66 @@ class _Lottery3DQuizPageState extends State<Lottery3DQuizPage> {
     return out;
   }
 
+  String _formatCountdown(int sec) {
+    final m = sec ~/ 60;
+    final s = sec % 60;
+    return '$m:${s.toString().padLeft(2, '0')}';
+  }
+
+  int _toNonNegativeSeconds(dynamic raw) {
+    final value = raw is num ? raw.toInt() : int.tryParse('${raw ?? ''}');
+    if (value == null || value < 0) return 0;
+    return value;
+  }
+
+  int _settingsHintLeadSeconds() {
+    final settings = _quizSettings;
+    if (settings == null) return 0;
+    const keys = [
+      'secondsUntilHint',
+      'hintLeadSeconds',
+      'hintSeconds',
+      'hintCountdownSeconds',
+      'hintDurationSeconds',
+      'hintDurationSec',
+    ];
+    for (final key in keys) {
+      final v = _toNonNegativeSeconds(settings[key]);
+      if (v > 0) return v;
+    }
+    return 0;
+  }
+
+  int _secondsUntilHint() {
+    final slotSeconds = _toNonNegativeSeconds(_slotData?['secondsUntilHint']);
+    if (slotSeconds > 0) return slotSeconds;
+
+    final nextIso = '${_slotData?['nextSlotStartIso'] ?? ''}'.trim();
+    final nextSlotStart = DateTime.tryParse(nextIso)?.toLocal();
+    if (nextSlotStart != null) {
+      final diff = nextSlotStart.difference(DateTime.now()).inSeconds;
+      final fallback = _settingsHintLeadSeconds();
+      if (diff > 0 && fallback > 0) {
+        final derived = diff - fallback;
+        if (derived > 0) return derived;
+      }
+    }
+    return 0;
+  }
+
   @override
   Widget build(BuildContext context) {
     final draw = '${_slotData?['drawLabelCurrent'] ?? _slotLabel(_slotData?['slotStartIso'])}';
     final remainingSlots = _remainingSlotsForToday();
-    final secsHint = int.tryParse('${_slotData?['secondsUntilHint'] ?? 0}') ?? 0;
-    final secsEnd = int.tryParse('${_slotData?['secondsUntilSlotEnd'] ?? 0}') ?? 0;
+    final secsHint = _secondsUntilHint();
+    final secsEnd = _toNonNegativeSeconds(_slotData?['secondsUntilSlotEnd']);
     String statusText;
     if (_slotErr.isNotEmpty) {
       statusText = 'Server: $_slotErr';
     } else if (_isHintPhase) {
-      statusText = 'Hint phase - Draw: $draw (${(secsEnd ~/ 60)}:${(secsEnd % 60).toString().padLeft(2, '0')})';
+      statusText = 'Hint phase - Draw: $draw (${_formatCountdown(secsEnd)})';
     } else {
-      statusText = 'Hint in ${(secsHint ~/ 60)}:${(secsHint % 60).toString().padLeft(2, '0')}';
+      statusText = 'Hint in ${_formatCountdown(secsHint)}';
     }
 
     return _Lottery3DSubPageTemplate(
@@ -585,6 +649,23 @@ class _Lottery3DQuizPageState extends State<Lottery3DQuizPage> {
   }
 }
 
+String _quiz3DHintQuestionText(Map<String, dynamic>? hint) {
+  if (hint == null) return '';
+  const keys = ['questionText', 'question', 'text', 'hintQuestion'];
+  for (final key in keys) {
+    final value = '${hint[key] ?? ''}'.trim();
+    if (value.isNotEmpty) return value;
+  }
+  final nested = hint['questionData'];
+  if (nested is Map) {
+    for (final key in keys) {
+      final value = '${nested[key] ?? ''}'.trim();
+      if (value.isNotEmpty) return value;
+    }
+  }
+  return '';
+}
+
 class _QuizHintCard3D extends StatelessWidget {
   const _QuizHintCard3D({required this.hint});
 
@@ -603,6 +684,8 @@ class _QuizHintCard3D extends StatelessWidget {
         ),
       );
     }
+    final h = hint!;
+    final questionText = _quiz3DHintQuestionText(h);
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(10),
@@ -614,30 +697,30 @@ class _QuizHintCard3D extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
+          Text(
             'Hint',
-            style: TextStyle(
+            style: quizDevanagariTextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w800,
               color: Colors.black,
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           Text(
-            '${hint?['questionText'] ?? '-'}',
-            style: const TextStyle(
+            'या प्रश्नाचा योग्य क्रमांक काय आहे?',
+            style: quizDevanagariTextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w700,
-              color: Colors.black,
+              color: const Color(0xFF4A1515),
             ),
           ),
           const SizedBox(height: 8),
           Text(
-            'Fairness hash: ${hint?['seedHash'] ?? '-'}',
-            style: const TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF334155),
+            questionText.isEmpty ? '-' : questionText,
+            style: quizDevanagariTextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w700,
+              color: Colors.black,
             ),
           ),
         ],
@@ -657,7 +740,6 @@ class _QuizQuestionList3D extends StatefulWidget {
 
 class _QuizQuestionList3DState extends State<_QuizQuestionList3D> {
   final Set<String> _revealedKeys = <String>{};
-  bool _orderAscending = true;
 
   String _stableQuestionKey(Map<String, dynamic> q, int sourceIndex) {
     final id = (q['id'] ?? q['_id']).toString().trim();
@@ -680,6 +762,21 @@ class _QuizQuestionList3DState extends State<_QuizQuestionList3D> {
     return raw.isEmpty ? 'Not available' : raw.toUpperCase();
   }
 
+  List<int> _questionOrderByQuestionNo(List<Map<String, dynamic>> questions) {
+    final n = questions.length;
+    if (n == 0) return const [];
+    final order = List<int>.generate(n, (i) => i);
+    order.sort((a, b) {
+      final aq = int.tryParse('${questions[a]['questionNo'] ?? ''}');
+      final bq = int.tryParse('${questions[b]['questionNo'] ?? ''}');
+      if (aq != null && bq != null) return bq.compareTo(aq);
+      if (aq != null) return -1;
+      if (bq != null) return 1;
+      return b.compareTo(a);
+    });
+    return order;
+  }
+
   @override
   Widget build(BuildContext context) {
     if (widget.questions.isEmpty) {
@@ -693,39 +790,11 @@ class _QuizQuestionList3DState extends State<_QuizQuestionList3D> {
         ),
       );
     }
-    final n = widget.questions.length;
-    final order = _orderAscending
-        ? List<int>.generate(n, (i) => i)
-        : List<int>.generate(n, (i) => n - 1 - i);
+    final order = _questionOrderByQuestionNo(widget.questions);
+    final n = order.length;
     final qnPad = n > 99 ? 3 : 2;
     return Column(
       children: [
-        Align(
-          alignment: Alignment.centerRight,
-          child: Tooltip(
-            message: 'Reorder questions: ascending (1→N) or descending (N→1)',
-            child: TextButton.icon(
-              onPressed: () => setState(() => _orderAscending = !_orderAscending),
-              icon: Icon(
-                _orderAscending ? Icons.arrow_downward : Icons.arrow_upward,
-                size: 18,
-                color: const Color(0xFF1D4ED8),
-              ),
-              label: Text(
-                _orderAscending ? 'Ascending' : 'Descending',
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800,
-                  color: Color(0xFF1D4ED8),
-                ),
-              ),
-              style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-            ),
-          ),
-        ),
         Expanded(
           child: ListView.separated(
             itemCount: n,
@@ -739,6 +808,7 @@ class _QuizQuestionList3DState extends State<_QuizQuestionList3D> {
                   : <String, dynamic>{};
               final answerText = _questionAnswer(q);
               final isRevealed = _revealedKeys.contains(revealKey);
+              final questionNo = int.tryParse('${q['questionNo'] ?? ''}');
               return Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
@@ -754,7 +824,7 @@ class _QuizQuestionList3DState extends State<_QuizQuestionList3D> {
                       children: [
                         Expanded(
                           child: Text(
-                            'Q${(src + 1).toString().padLeft(qnPad, '0')}: ${q['question'] ?? ''}',
+                            'Q${((questionNo ?? (src + 1))).toString().padLeft(qnPad, '0')}: ${q['question'] ?? ''}',
                             style: const TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.w700,

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../services/auth_service.dart';
@@ -31,6 +33,7 @@ class DoublePanaBidScreen extends StatefulWidget {
 
 class _DoublePanaBidScreenState extends State<DoublePanaBidScreen> {
   static const _quickPoints = [10, 20, 30, 40, 50];
+  static const Duration _easyAutoAddDelay = Duration(milliseconds: 900);
 
   bool _easy = true;
   String _session = 'OPEN';
@@ -41,6 +44,7 @@ class _DoublePanaBidScreenState extends State<DoublePanaBidScreen> {
   final _numCtrl = TextEditingController();
   final _ptsCtrl = TextEditingController();
   final List<_Line> _bids = [];
+  Timer? _easyAutoAddTimer;
 
   late final Map<int, List<String>> _sumToPanas;
 
@@ -73,6 +77,7 @@ class _DoublePanaBidScreenState extends State<DoublePanaBidScreen> {
 
   @override
   void dispose() {
+    _easyAutoAddTimer?.cancel();
     _numCtrl.dispose();
     _ptsCtrl.dispose();
     super.dispose();
@@ -86,6 +91,7 @@ class _DoublePanaBidScreenState extends State<DoublePanaBidScreen> {
   }
 
   void _masterClear() {
+    _easyAutoAddTimer?.cancel();
     setState(() {
       _numCtrl.clear();
       _ptsCtrl.clear();
@@ -107,10 +113,20 @@ class _DoublePanaBidScreenState extends State<DoublePanaBidScreen> {
     }
   }
 
-  void _tryAutoAddEasy() {
+  void _maybeWarnInvalidPanaEasy() {
+    final n = _numCtrl.text.trim();
+    if (n.length != 3 || isValidDoublePana(n)) return;
+    final msg = invalidDoublePanaMessage(n);
+    if (msg.isNotEmpty) _toast(msg);
+  }
+
+  void _addEasy() {
+    _easyAutoAddTimer?.cancel();
     final n = _numCtrl.text.trim();
     final pts = int.tryParse(_ptsCtrl.text.trim()) ?? 0;
-    if (n.length != 3 || pts <= 0 || !isValidDoublePana(n)) return;
+    if (pts <= 0) return _toast('Enter points');
+    final panaErr = invalidDoublePanaMessage(n);
+    if (panaErr.isNotEmpty) return _toast(panaErr);
     setState(() {
       _mergeAdd(n, pts);
       _numCtrl.clear();
@@ -118,15 +134,20 @@ class _DoublePanaBidScreenState extends State<DoublePanaBidScreen> {
     });
   }
 
-  void _addEasy() {
-    final n = _numCtrl.text.trim();
-    final pts = int.tryParse(_ptsCtrl.text.trim()) ?? 0;
-    if (pts <= 0) return _toast('Enter points');
-    if (!isValidDoublePana(n)) return _toast('Invalid double pana');
-    setState(() {
-      _mergeAdd(n, pts);
-      _numCtrl.clear();
-      _ptsCtrl.clear();
+  void _scheduleAutoAddEasy() {
+    _easyAutoAddTimer?.cancel();
+    if (!_easy) return;
+
+    _easyAutoAddTimer = Timer(_easyAutoAddDelay, () {
+      if (!mounted || !_easy) return;
+      final n = _numCtrl.text.trim();
+      final pts = int.tryParse(_ptsCtrl.text.trim()) ?? 0;
+      if (n.length != 3 || pts <= 0 || !isValidDoublePana(n)) return;
+      setState(() {
+        _mergeAdd(n, pts);
+        _numCtrl.clear();
+        _ptsCtrl.clear();
+      });
     });
   }
 
@@ -169,6 +190,29 @@ class _DoublePanaBidScreenState extends State<DoublePanaBidScreen> {
     return (count: count, points: points);
   }
 
+  List<_Line> _displayBids() {
+    final out = List<_Line>.from(_bids);
+    if (!_easy) return out;
+
+    final n = _numCtrl.text.trim();
+    final p = int.tryParse(_ptsCtrl.text.trim()) ?? 0;
+    if (p <= 0 || n.length != 3 || !isValidDoublePana(n)) return out;
+
+    final i = out.indexWhere((b) => b.number == n && b.session == _session);
+    if (i >= 0) {
+      final prev = int.tryParse(out[i].points) ?? 0;
+      out[i] = _Line(
+        id: out[i].id,
+        number: out[i].number,
+        points: '${prev + p}',
+        session: out[i].session,
+      );
+    } else {
+      out.add(_Line(id: -1, number: n, points: '$p', session: _session));
+    }
+    return out;
+  }
+
   bool _materializePendingEasyBeforeSubmit() {
     final n = _numCtrl.text.trim();
     final pText = _ptsCtrl.text.trim();
@@ -180,8 +224,9 @@ class _DoublePanaBidScreenState extends State<DoublePanaBidScreen> {
       _toast('Enter points');
       return false;
     }
-    if (!isValidDoublePana(n)) {
-      _toast('Invalid double pana');
+    final panaErr = invalidDoublePanaMessage(n);
+    if (panaErr.isNotEmpty) {
+      _toast(panaErr);
       return false;
     }
 
@@ -246,6 +291,7 @@ class _DoublePanaBidScreenState extends State<DoublePanaBidScreen> {
   @override
   Widget build(BuildContext context) {
     final live = _liveStats();
+    final displayBids = _displayBids();
     final tile = GameBidUi.defaultBetTileExtent(context);
     return GameBidLayout(
       market: widget.market,
@@ -270,7 +316,10 @@ class _DoublePanaBidScreenState extends State<DoublePanaBidScreen> {
             children: [
               Expanded(
                 child: OutlinedButton(
-                  onPressed: () => setState(() => _easy = true),
+                  onPressed: () {
+                    _easyAutoAddTimer?.cancel();
+                    setState(() => _easy = true);
+                  },
                   style: GameBidUi.modeToggle(_easy),
                   child: const Text('EASY MODE'),
                 ),
@@ -278,7 +327,10 @@ class _DoublePanaBidScreenState extends State<DoublePanaBidScreen> {
               const SizedBox(width: 8),
               Expanded(
                 child: OutlinedButton(
-                  onPressed: () => setState(() => _easy = false),
+                  onPressed: () {
+                    _easyAutoAddTimer?.cancel();
+                    setState(() => _easy = false);
+                  },
                   style: GameBidUi.modeToggle(!_easy),
                   child: const Text('SPECIAL MODE'),
                 ),
@@ -293,9 +345,11 @@ class _DoublePanaBidScreenState extends State<DoublePanaBidScreen> {
               maxLength: 3,
               onChanged: (_) {
                 setState(() {});
-                _tryAutoAddEasy();
+                _scheduleAutoAddEasy();
               },
-              onEditingComplete: _tryAutoAddEasy,
+              onEditingComplete: () {
+                _maybeWarnInvalidPanaEasy();
+              },
               onSubmitted: (_) => _addEasy(),
               decoration: GameBidUi.inputDecoration(labelText: 'Enter Pana', hintText: 'Pana', counterText: ''),
             ),
@@ -305,9 +359,8 @@ class _DoublePanaBidScreenState extends State<DoublePanaBidScreen> {
               keyboardType: TextInputType.number,
               onChanged: (_) {
                 setState(() {});
-                _tryAutoAddEasy();
+                _scheduleAutoAddEasy();
               },
-              onEditingComplete: _tryAutoAddEasy,
               onSubmitted: (_) => _addEasy(),
               decoration: GameBidUi.inputDecoration(labelText: 'Points'),
             ),
@@ -335,7 +388,7 @@ class _DoublePanaBidScreenState extends State<DoublePanaBidScreen> {
                   extent: tile,
                   onSelected: (_) {
                     setState(() => _ptsCtrl.text = '$p');
-                    _tryAutoAddEasy();
+                    _scheduleAutoAddEasy();
                   },
                 );
               }).toList(),
@@ -436,7 +489,7 @@ class _DoublePanaBidScreenState extends State<DoublePanaBidScreen> {
           ],
           const Divider(height: 24),
           Text('Your bets', style: GameBidUi.panelTitle.copyWith(fontSize: 15)),
-          ..._bids.map(
+          ...displayBids.map(
             (b) => ListTile(
               dense: true,
               title: Text(
@@ -448,7 +501,7 @@ class _DoublePanaBidScreenState extends State<DoublePanaBidScreen> {
                 children: [
                   Text('₹${b.points}', style: TextStyle(color: CasinoUi.mutedGold(0.9))),
                   IconButton(
-                    onPressed: () => setState(() => _bids.removeWhere((e) => e.id == b.id)),
+                    onPressed: b.id < 0 ? null : () => setState(() => _bids.removeWhere((e) => e.id == b.id)),
                     icon: Icon(Icons.close, color: AppColors.gold.withValues(alpha: 0.85)),
                   ),
                 ],

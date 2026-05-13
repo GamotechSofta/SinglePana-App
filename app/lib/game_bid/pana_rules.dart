@@ -37,6 +37,36 @@ bool isValidDoublePana(String? n) {
   return true;
 }
 
+/// User-facing error for an invalid double pana. Returns empty if [raw] is valid.
+String invalidDoublePanaMessage(String? raw) {
+  if (isValidDoublePana(raw)) return '';
+  final str = (raw ?? '').trim();
+  if (str.isEmpty) {
+    return 'Enter a 3-digit double pana. Examples: 112, 455, 100.';
+  }
+  if (!RegExp(r'^\d*$').hasMatch(str)) {
+    return 'Use digits only. Example of a valid double pana: 112.';
+  }
+  if (!RegExp(r'^\d{3}$').hasMatch(str)) {
+    return 'Enter exactly 3 digits. Example: 112 (you entered ${str.length} digit${str.length == 1 ? '' : 's'}).';
+  }
+  final digits = str.split('').map(int.parse).toList();
+  final first = digits[0];
+  final second = digits[1];
+  final third = digits[2];
+  final hasConsecutiveSame = first == second || second == third;
+  if (!hasConsecutiveSame) {
+    return 'Invalid double pana: two equal digits must be next to each other (e.g. 112, 233). 121 is not valid.';
+  }
+  if (first == 0) {
+    return 'Invalid double pana: cannot start with 0. Examples: 100, 110, 200.';
+  }
+  if (third <= first) {
+    return 'Invalid double pana: last digit must be greater than the first (e.g. 112 is valid; 221 is not).';
+  }
+  return 'Invalid double pana. Valid examples: 112, 455, 100, 900.';
+}
+
 bool isValidTriplePana(String? n) {
   final s = (n ?? '').trim();
   if (!RegExp(r'^\d{3}$').hasMatch(s)) return false;
