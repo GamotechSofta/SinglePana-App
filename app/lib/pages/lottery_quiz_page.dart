@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import '../config/api_config.dart';
 import '../services/auth_service.dart';
 import '../utils/devanagari_text.dart';
+import '../utils/quiz_display.dart';
 
 class LotteryQuizPage extends StatefulWidget {
   const LotteryQuizPage({super.key});
@@ -17,8 +18,6 @@ class LotteryQuizPage extends StatefulWidget {
 }
 
 class _LotteryQuizPageState extends State<LotteryQuizPage> {
-  static const _questionRevealStaggerMs = 8100;
-
   int _selectedQuiz = 1;
   Map<String, dynamic>? _slotData;
   String _slotErr = '';
@@ -66,6 +65,16 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
     ]);
   }
 
+  int get _revealStaggerMs => revealStaggerMsFromSettings(
+        _quizSettings,
+        defaultMs: kQuiz2dRevealStaggerMs,
+      );
+
+  List<Map<String, dynamic>> get _studyVisibleQuestions => studyVisibleQuestions(
+        _questions,
+        _visibleQuestionCount,
+      );
+
   Future<Map<String, String>> _authHeaders() async {
     final user = await AuthService.instance.getStoredUser();
     final token = user?['token']?.toString().trim() ?? '';
@@ -75,7 +84,7 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
 
   Future<void> _pollSlotOnce() async {
     try {
-      final res = await http.get(Uri.parse('$kApiBaseUrl/quiz/slot'));
+      final res = await http.get(Uri.parse('$kApiBaseUrl/quiz/slot?mode=2d'));
       final json = jsonDecode(res.body) as Map<String, dynamic>?;
       if (!mounted) return;
       if (res.statusCode >= 200 && res.statusCode < 300 && json?['success'] == true && json?['data'] is Map) {
@@ -148,10 +157,13 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
         setState(() => _visibleQuestionCount = 0);
         return;
       }
-      final elapsed = DateTime.now().difference(slotStart).inMilliseconds;
-      final count = (elapsed <= 0) ? 4 : ((elapsed ~/ _questionRevealStaggerMs) + 1);
-      final withMinimum = count < 4 ? 4 : count;
-      setState(() => _visibleQuestionCount = withMinimum.clamp(1, _questions.length));
+      setState(() {
+        _visibleQuestionCount = visibleQuestionCountFromSlotStart(
+          '${_slotData?['slotStartIso']}',
+          _questions.length,
+          staggerMs: _revealStaggerMs,
+        );
+      });
     }
 
     tick();
@@ -167,7 +179,8 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
     Future<void> loadHint() async {
       try {
         final uri = Uri.parse('$kApiBaseUrl/quiz/hint/$_selectedQuiz?mode=2d');
-        final res = await http.get(uri);
+        final headers = await _authHeaders();
+        final res = await http.get(uri, headers: headers);
         final json = jsonDecode(res.body) as Map<String, dynamic>?;
         if (!mounted) return;
         if (res.statusCode >= 200 && res.statusCode < 300 && json?['success'] == true && json?['data'] is Map) {
@@ -204,7 +217,8 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
     });
     try {
       final uri = Uri.parse('$kApiBaseUrl/quiz/questions/$_selectedQuiz?mode=2d');
-      final res = await http.get(uri);
+      final headers = await _authHeaders();
+      final res = await http.get(uri, headers: headers);
       final json = jsonDecode(res.body) as Map<String, dynamic>?;
       if (!mounted) return;
       if (res.statusCode >= 200 && res.statusCode < 300 && json?['success'] == true) {
@@ -215,12 +229,8 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
             if (e is Map) Map<String, dynamic>.from(e),
         ];
         setState(() {
-          if (resetExisting || _questions.isEmpty) {
-            _questions = fetched;
-          } else if (fetched.length > _questions.length) {
-            // Append only newly available rows instead of reloading all rows every poll.
-            _questions = [..._questions, ...fetched.sublist(_questions.length)];
-          }
+          // Keep API shuffle order (same as website); replace list each fetch.
+          _questions = fetched;
           _questionsSlotLoaded = '${_slotData?['slotStartIso'] ?? ''}';
           _questionsQuizLoaded = _selectedQuiz;
           _questionsLoading = false;
@@ -478,14 +488,14 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
       );
     }
 
-    final orderHint = _studyQuestionSourceIndices();
+    final visible = _studyVisibleQuestions;
     return ListView.builder(
       padding: const EdgeInsets.all(6),
-      itemCount: _visibleQuestionCount.clamp(0, orderHint.length),
+      itemCount: visible.length,
       itemBuilder: (context, i) {
-        final srcIdx = orderHint[i];
-        final row = _questions[srcIdx];
-        final rowId = '${row['id'] ?? srcIdx}';
+        final row = visible[i];
+        final rowId = '${row['id'] ?? i}';
+        final slotIndex = slotIndexForStudyRow(_questions.length, i);
         final options = (row['options'] is Map) ? Map<String, dynamic>.from(row['options'] as Map) : <String, dynamic>{};
         final revealed = _answerRevealed[rowId] ?? false;
         return Container(
@@ -503,7 +513,7 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
                 children: [
                   Expanded(
                     child: Text(
-                      'Q${(srcIdx + 1).toString().padLeft(_questions.length > 99 ? 3 : 2, '0')} · $drawCurrent',
+                      'No. ${padQuizSlotIndex(slotIndex)} · $drawCurrent',
                       style: const TextStyle(fontSize: 8.5, fontWeight: FontWeight.w700, color: Color(0xFF1A4D2E)),
                     ),
                   ),
@@ -800,21 +810,6 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
     );
   }
 
-  List<int> _studyQuestionSourceIndices() {
-    final n = _questions.length;
-    if (n == 0) return const [];
-    final order = List<int>.generate(n, (i) => i);
-    order.sort((a, b) {
-      final aq = int.tryParse('${_questions[a]['questionNo'] ?? ''}');
-      final bq = int.tryParse('${_questions[b]['questionNo'] ?? ''}');
-      if (aq != null && bq != null) return bq.compareTo(aq);
-      if (aq != null) return -1;
-      if (bq != null) return 1;
-      return b.compareTo(a);
-    });
-    return order;
-  }
-
   List<String> _remainingSlotsForToday() {
     final nextIso = (_slotData?['nextSlotStartIso'] ?? '').toString().trim();
     final nextDt = DateTime.tryParse(nextIso)?.toLocal();
@@ -840,8 +835,8 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
   }
 
   Widget _buildStudyTable(String quizLabel, String drawCurrent) {
-    final order = _studyQuestionSourceIndices();
-    final totalRows = _visibleQuestionCount.clamp(0, order.length);
+    final visible = _studyVisibleQuestions;
+    final totalRows = visible.length;
     const borderColor = Color(0xFFCFB187);
 
     return Container(
@@ -929,11 +924,9 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
                         padding: EdgeInsets.zero,
                         itemCount: totalRows,
                         itemBuilder: (context, i) {
-                          final srcIdx = order[i];
-                          final row = _questions[srcIdx];
-                          final id = '${row['id'] ?? srcIdx}';
-                          final qnPad = _questions.length > 99 ? 3 : 2;
-                          final questionNo = int.tryParse('${row['questionNo'] ?? ''}');
+                          final row = visible[i];
+                          final id = '${row['id'] ?? i}';
+                          final slotIndex = slotIndexForStudyRow(_questions.length, i);
                           final options = (row['options'] is Map) ? Map<String, dynamic>.from(row['options'] as Map) : <String, dynamic>{};
                           final reveal = _answerRevealed[id] ?? false;
                           return SizedBox(
@@ -953,7 +946,7 @@ class _LotteryQuizPageState extends State<LotteryQuizPage> {
                                       mainAxisAlignment: MainAxisAlignment.center,
                                       children: [
                                         Text(
-                                          'Question No. ${((questionNo ?? (srcIdx + 1))).toString().padLeft(qnPad, '0')}',
+                                          'No. ${padQuizSlotIndex(slotIndex)}',
                                           style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Colors.black),
                                         ),
                                         Text(

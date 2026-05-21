@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import '../config/api_config.dart';
 import '../services/auth_service.dart';
 import '../utils/devanagari_text.dart';
+import '../utils/quiz_display.dart';
 
 class Lottery3DResultPage extends StatefulWidget {
   const Lottery3DResultPage({super.key});
@@ -245,9 +246,11 @@ class _Lottery3DQuizPageState extends State<Lottery3DQuizPage> {
   bool _loading = false;
   String _error = '';
   List<Map<String, dynamic>> _questions = const [];
+  int _visibleQuestionCount = 0;
   Map<String, dynamic>? _hint;
   Map<String, dynamic>? _quizSettings;
   Timer? _poll;
+  Timer? _revealTicker;
 
   @override
   void initState() {
@@ -260,8 +263,19 @@ class _Lottery3DQuizPageState extends State<Lottery3DQuizPage> {
   @override
   void dispose() {
     _poll?.cancel();
+    _revealTicker?.cancel();
     super.dispose();
   }
+
+  int get _revealStaggerMs => revealStaggerMsFromSettings(
+        _quizSettings,
+        defaultMs: kQuiz3dRevealStaggerMs,
+      );
+
+  List<Map<String, dynamic>> get _studyVisibleQuestions => studyVisibleQuestions(
+        _questions,
+        _visibleQuestionCount,
+      );
 
   bool get _isHintPhase => (_slotData?['phase'] ?? '').toString() == 'hint';
 
@@ -276,6 +290,7 @@ class _Lottery3DQuizPageState extends State<Lottery3DQuizPage> {
     setState(() {
       _loading = true;
       _error = '';
+      _visibleQuestionCount = 0;
     });
     await _loadQuizSettings();
     await _loadSlot();
@@ -294,6 +309,13 @@ class _Lottery3DQuizPageState extends State<Lottery3DQuizPage> {
     setState(() => _loading = false);
   }
 
+  Future<Map<String, String>> _authHeaders() async {
+    final user = await AuthService.instance.getStoredUser();
+    final token = user?['token']?.toString().trim() ?? '';
+    if (token.isEmpty) return const {};
+    return {'Authorization': 'Bearer $token'};
+  }
+
   Future<void> _loadQuizSettings() async {
     try {
       final res = await http.get(Uri.parse('$kApiBaseUrl/quiz/settings?mode=3d'));
@@ -309,7 +331,7 @@ class _Lottery3DQuizPageState extends State<Lottery3DQuizPage> {
 
   Future<void> _loadSlot() async {
     try {
-      final res = await http.get(Uri.parse('$kApiBaseUrl/quiz/slot'));
+      final res = await http.get(Uri.parse('$kApiBaseUrl/quiz/slot?mode=3d'));
       final json = jsonDecode(res.body) as Map<String, dynamic>?;
       if (!mounted) return;
       if (res.statusCode >= 200 && res.statusCode < 300 && json?['success'] == true && json?['data'] is Map) {
@@ -317,6 +339,11 @@ class _Lottery3DQuizPageState extends State<Lottery3DQuizPage> {
           _slotData = Map<String, dynamic>.from(json!['data'] as Map);
           _slotErr = '';
         });
+        if (!_isHintPhase) {
+          _startRevealTicker();
+        } else {
+          setState(() => _visibleQuestionCount = 0);
+        }
       } else {
         setState(() => _slotErr = json?['message']?.toString() ?? 'Failed to load slot');
       }
@@ -328,7 +355,8 @@ class _Lottery3DQuizPageState extends State<Lottery3DQuizPage> {
 
   Future<void> _loadQuestions() async {
     try {
-      final res = await http.get(Uri.parse('$kApiBaseUrl/quiz/questions/$_selectedQuiz?mode=3d'));
+      final headers = await _authHeaders();
+      final res = await http.get(Uri.parse('$kApiBaseUrl/quiz/questions/$_selectedQuiz?mode=3d'), headers: headers);
       final json = jsonDecode(res.body) as Map<String, dynamic>?;
       if (!mounted) return;
       if (res.statusCode >= 200 && res.statusCode < 300 && json?['success'] == true) {
@@ -341,6 +369,7 @@ class _Lottery3DQuizPageState extends State<Lottery3DQuizPage> {
           ];
           _error = '';
         });
+        _startRevealTicker();
       } else {
         setState(() {
           _questions = const [];
@@ -358,7 +387,8 @@ class _Lottery3DQuizPageState extends State<Lottery3DQuizPage> {
 
   Future<void> _loadHint() async {
     try {
-      final res = await http.get(Uri.parse('$kApiBaseUrl/quiz/hint/$_selectedQuiz?mode=3d'));
+      final headers = await _authHeaders();
+      final res = await http.get(Uri.parse('$kApiBaseUrl/quiz/hint/$_selectedQuiz?mode=3d'), headers: headers);
       final json = jsonDecode(res.body) as Map<String, dynamic>?;
       if (!mounted) return;
       if (res.statusCode >= 200 && res.statusCode < 300 && json?['success'] == true && json?['data'] is Map) {
@@ -379,6 +409,27 @@ class _Lottery3DQuizPageState extends State<Lottery3DQuizPage> {
         _error = 'Hint not available';
       });
     }
+  }
+
+  void _startRevealTicker() {
+    _revealTicker?.cancel();
+    if (_slotData?['slotStartIso'] == null || _questions.isEmpty) {
+      setState(() => _visibleQuestionCount = 0);
+      return;
+    }
+    void tick() {
+      if (!mounted) return;
+      setState(() {
+        _visibleQuestionCount = visibleQuestionCountFromSlotStart(
+          '${_slotData?['slotStartIso']}',
+          _questions.length,
+          staggerMs: _revealStaggerMs,
+        );
+      });
+    }
+
+    tick();
+    _revealTicker = Timer.periodic(const Duration(milliseconds: 250), (_) => tick());
   }
 
   String _slotLabel(dynamic v) {
@@ -581,7 +632,11 @@ class _Lottery3DQuizPageState extends State<Lottery3DQuizPage> {
                       height: 30,
                       child: ElevatedButton(
                         onPressed: () {
-                          setState(() => _selectedQuiz = q);
+                          setState(() {
+                            _selectedQuiz = q;
+                            _questions = const [];
+                            _visibleQuestionCount = 0;
+                          });
                           _refreshAll();
                         },
                         style: ElevatedButton.styleFrom(
@@ -620,7 +675,10 @@ class _Lottery3DQuizPageState extends State<Lottery3DQuizPage> {
                         )
                       : _isHintPhase
                           ? _QuizHintCard3D(hint: _hint)
-                          : _QuizQuestionList3D(questions: _questions),
+                          : _QuizQuestionList3D(
+                              visibleQuestions: _studyVisibleQuestions,
+                              totalQuestionCount: _questions.length,
+                            ),
             ),
           ],
         ),
@@ -730,9 +788,13 @@ class _QuizHintCard3D extends StatelessWidget {
 }
 
 class _QuizQuestionList3D extends StatefulWidget {
-  const _QuizQuestionList3D({required this.questions});
+  const _QuizQuestionList3D({
+    required this.visibleQuestions,
+    required this.totalQuestionCount,
+  });
 
-  final List<Map<String, dynamic>> questions;
+  final List<Map<String, dynamic>> visibleQuestions;
+  final int totalQuestionCount;
 
   @override
   State<_QuizQuestionList3D> createState() => _QuizQuestionList3DState();
@@ -762,24 +824,9 @@ class _QuizQuestionList3DState extends State<_QuizQuestionList3D> {
     return raw.isEmpty ? 'Not available' : raw.toUpperCase();
   }
 
-  List<int> _questionOrderByQuestionNo(List<Map<String, dynamic>> questions) {
-    final n = questions.length;
-    if (n == 0) return const [];
-    final order = List<int>.generate(n, (i) => i);
-    order.sort((a, b) {
-      final aq = int.tryParse('${questions[a]['questionNo'] ?? ''}');
-      final bq = int.tryParse('${questions[b]['questionNo'] ?? ''}');
-      if (aq != null && bq != null) return bq.compareTo(aq);
-      if (aq != null) return -1;
-      if (bq != null) return 1;
-      return b.compareTo(a);
-    });
-    return order;
-  }
-
   @override
   Widget build(BuildContext context) {
-    if (widget.questions.isEmpty) {
+    if (widget.visibleQuestions.isEmpty) {
       return const Center(
         child: Text(
           'No questions available',
@@ -790,25 +837,23 @@ class _QuizQuestionList3DState extends State<_QuizQuestionList3D> {
         ),
       );
     }
-    final order = _questionOrderByQuestionNo(widget.questions);
-    final n = order.length;
-    final qnPad = n > 99 ? 3 : 2;
+    final visible = widget.visibleQuestions;
+    final total = widget.totalQuestionCount;
     return Column(
       children: [
         Expanded(
           child: ListView.separated(
-            itemCount: n,
+            itemCount: visible.length,
             separatorBuilder: (_, __) => const SizedBox(height: 6),
-            itemBuilder: (context, di) {
-              final src = order[di];
-              final q = widget.questions[src];
-              final revealKey = _stableQuestionKey(q, src);
+            itemBuilder: (context, position) {
+              final q = visible[position];
+              final slotIndex = slotIndexForStudyRow(total, position);
+              final revealKey = _stableQuestionKey(q, slotIndex);
               final options = q['options'] is Map
                   ? Map<String, dynamic>.from(q['options'] as Map)
                   : <String, dynamic>{};
               final answerText = _questionAnswer(q);
               final isRevealed = _revealedKeys.contains(revealKey);
-              final questionNo = int.tryParse('${q['questionNo'] ?? ''}');
               return Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
@@ -824,7 +869,7 @@ class _QuizQuestionList3DState extends State<_QuizQuestionList3D> {
                       children: [
                         Expanded(
                           child: Text(
-                            'Q${((questionNo ?? (src + 1))).toString().padLeft(qnPad, '0')}: ${q['question'] ?? ''}',
+                            'No. ${padQuizSlotIndex(slotIndex, is3d: true)}: ${q['question'] ?? ''}',
                             style: const TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.w700,
